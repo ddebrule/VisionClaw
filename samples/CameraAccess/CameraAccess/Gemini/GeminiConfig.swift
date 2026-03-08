@@ -1,10 +1,9 @@
 import Foundation
 
 enum GeminiConfig {
+  // Original audio-native model — uses v1alpha endpoint
   static let websocketBaseURL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
-
-  // gemini-2.0-flash-live-001 supports responseModalities: ["TEXT"]
-  static let model = "models/gemini-2.0-flash-live-001"
+  static let model = "models/gemini-2.5-flash-native-audio-preview-12-2025"
 
   static let inputAudioSampleRate: Double = 16000
   static let outputAudioSampleRate: Double = 24000
@@ -38,12 +37,10 @@ enum GeminiConfig {
     waiting at the pit table.
     """
 
-  // Spectre Scout_IQ endpoints (injected at build time via Secrets.swift)
   static var spectreTTSURL: String { Secrets.spectreTTSURL }
   static var spectreScoutURL: String { Secrets.spectreScoutURL }
   static var spectreUserToken: String { Secrets.spectreUserToken }
 
-  // User-configurable values
   static var apiKey: String { SettingsManager.shared.geminiAPIKey }
   static var openClawHost: String { SettingsManager.shared.openClawHost }
   static var openClawPort: Int { SettingsManager.shared.openClawPort }
