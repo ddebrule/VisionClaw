@@ -87,8 +87,6 @@ enum GeminiConfig {
   static var spectreTTSURL: String { Secrets.spectreTTSURL }
   static var spectreScoutURL: String { Secrets.spectreScoutURL }
   static var spectreActiveSessionURL: String { spectreScoutURL.hasSuffix("/active-session") ? spectreScoutURL : spectreScoutURL + "/active-session" }
-    return base.deletingLastPathComponent().appendingPathComponent("active-session").absoluteString
-  }
   static var spectreUserToken: String { Secrets.spectreUserToken }
 
   // User-configurable values
