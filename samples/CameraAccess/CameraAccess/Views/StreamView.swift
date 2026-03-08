@@ -6,14 +6,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-//
-// StreamView.swift
-//
-// Main UI for video streaming from Meta wearable devices using the DAT SDK.
-// This view demonstrates the complete streaming API: video streaming with real-time display, photo capture,
-// and error handling. Extended with Gemini Live AI assistant and WebRTC live streaming integration.
-//
-
 import MWDATCore
 import SwiftUI
 
@@ -25,11 +17,8 @@ struct StreamView: View {
 
   var body: some View {
     ZStack {
-      // Black background for letterboxing/pillarboxing
-      Color.black
-        .edgesIgnoringSafeArea(.all)
+      Color.black.edgesIgnoringSafeArea(.all)
 
-      // Video backdrop: PiP when WebRTC connected, otherwise single local feed
       if webrtcVM.isActive && webrtcVM.connectionState == .connected {
         PiPVideoView(
           localFrame: viewModel.currentVideoFrame,
@@ -51,22 +40,15 @@ struct StreamView: View {
           .foregroundColor(.white)
       }
 
-      // Gemini status overlay (top) + speaking indicator
       if geminiVM.isGeminiActive {
         VStack {
           GeminiStatusBar(geminiVM: geminiVM)
           Spacer()
-
           VStack(spacing: 8) {
             if !geminiVM.userTranscript.isEmpty || !geminiVM.aiTranscript.isEmpty {
-              TranscriptView(
-                userText: geminiVM.userTranscript,
-                aiText: geminiVM.aiTranscript
-              )
+              TranscriptView(userText: geminiVM.userTranscript, aiText: geminiVM.aiTranscript)
             }
-
             ToolCallStatusView(status: geminiVM.toolCallStatus)
-
             if geminiVM.isModelSpeaking {
               HStack(spacing: 8) {
                 Image(systemName: "speaker.wave.2.fill")
@@ -74,9 +56,21 @@ struct StreamView: View {
                   .font(.system(size: 14))
                 SpeakingIndicator()
               }
-              .padding(.horizontal, 16)
-              .padding(.vertical, 8)
+              .padding(.horizontal, 16).padding(.vertical, 8)
               .background(Color.black.opacity(0.5))
+              .cornerRadius(20)
+            }
+            if geminiVM.isSendingScoutReport {
+              HStack(spacing: 8) {
+                ProgressView()
+                  .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                  .scaleEffect(0.8)
+                Text("Sending scout report to Setup_IQ...")
+                  .foregroundColor(.white)
+                  .font(.system(size: 13))
+              }
+              .padding(.horizontal, 16).padding(.vertical, 8)
+              .background(Color.black.opacity(0.6))
               .cornerRadius(20)
             }
           }
@@ -85,7 +79,6 @@ struct StreamView: View {
         .padding(.all, 24)
       }
 
-      // WebRTC status overlay (top)
       if webrtcVM.isActive {
         VStack {
           WebRTCStatusBar(webrtcVM: webrtcVM)
@@ -94,7 +87,6 @@ struct StreamView: View {
         .padding(.all, 24)
       }
 
-      // Bottom controls layer
       VStack {
         Spacer()
         ControlsView(viewModel: viewModel, geminiVM: geminiVM, webrtcVM: webrtcVM)
@@ -103,29 +95,16 @@ struct StreamView: View {
     }
     .onDisappear {
       Task {
-        if viewModel.streamingStatus != .stopped {
-          await viewModel.stopSession()
-        }
-        if geminiVM.isGeminiActive {
-          geminiVM.stopSession()
-        }
-        if webrtcVM.isActive {
-          webrtcVM.stopSession()
-        }
+        if viewModel.streamingStatus != .stopped { await viewModel.stopSession() }
+        if geminiVM.isGeminiActive { geminiVM.stopSession() }
+        if webrtcVM.isActive { webrtcVM.stopSession() }
       }
     }
-    // Show captured photos from DAT SDK in a preview sheet
     .sheet(isPresented: $viewModel.showPhotoPreview) {
       if let photo = viewModel.capturedPhoto {
-        PhotoPreviewView(
-          photo: photo,
-          onDismiss: {
-            viewModel.dismissPhotoPreview()
-          }
-        )
+        PhotoPreviewView(photo: photo, onDismiss: { viewModel.dismissPhotoPreview() })
       }
     }
-    // Gemini error alert
     .alert("AI Assistant", isPresented: Binding(
       get: { geminiVM.errorMessage != nil },
       set: { if !$0 { geminiVM.errorMessage = nil } }
@@ -134,7 +113,6 @@ struct StreamView: View {
     } message: {
       Text(geminiVM.errorMessage ?? "")
     }
-    // WebRTC error alert
     .alert("Live Stream", isPresented: Binding(
       get: { webrtcVM.errorMessage != nil },
       set: { if !$0 { webrtcVM.errorMessage = nil } }
@@ -146,49 +124,58 @@ struct StreamView: View {
   }
 }
 
-// Extracted controls for clarity
 struct ControlsView: View {
   @ObservedObject var viewModel: StreamSessionViewModel
   @ObservedObject var geminiVM: GeminiSessionViewModel
   @ObservedObject var webrtcVM: WebRTCSessionViewModel
+  @State private var showEndScoutConfirm = false
 
   var body: some View {
-    // Controls row
     HStack(spacing: 8) {
-      CustomButton(
-        title: "Stop streaming",
-        style: .destructive,
-        isDisabled: false
-      ) {
-        Task {
-          await viewModel.stopSession()
-        }
+      CustomButton(title: "Stop streaming", style: .destructive, isDisabled: false) {
+        Task { await viewModel.stopSession() }
       }
 
-      // Photo button (glasses mode only -- DAT SDK capture)
       if viewModel.streamingMode == .glasses {
         CircleButton(icon: "camera.fill", text: nil) {
           viewModel.capturePhoto()
         }
       }
 
-      // Gemini AI button (disabled when WebRTC is active — audio conflict)
       CircleButton(
         icon: geminiVM.isGeminiActive ? "waveform.circle.fill" : "waveform.circle",
-        text: "AI"
+        text: "Scout"
       ) {
         Task {
-          if geminiVM.isGeminiActive {
-            geminiVM.stopSession()
-          } else {
-            await geminiVM.startSession()
-          }
+          if geminiVM.isGeminiActive { geminiVM.stopSession() }
+          else { await geminiVM.startSession() }
         }
       }
       .opacity(webrtcVM.isActive ? 0.4 : 1.0)
       .disabled(webrtcVM.isActive)
 
-      // WebRTC Live Stream button (disabled when Gemini is active — audio conflict)
+      if geminiVM.isGeminiActive {
+        CircleButton(
+          icon: geminiVM.isSendingScoutReport ? "arrow.up.circle" : "flag.checkered.circle.fill",
+          text: "End"
+        ) {
+          showEndScoutConfirm = true
+        }
+        .disabled(geminiVM.isSendingScoutReport)
+        .confirmationDialog(
+          "End Scout session?",
+          isPresented: $showEndScoutConfirm,
+          titleVisibility: .visible
+        ) {
+          Button("Send Report to Setup_IQ", role: .none) {
+            Task { await geminiVM.endScout() }
+          }
+          Button("Cancel", role: .cancel) {}
+        } message: {
+          Text("Your field observations will be delivered to Setup_IQ at the pit table.")
+        }
+      }
+
       CircleButton(
         icon: webrtcVM.isActive
           ? "antenna.radiowaves.left.and.right.circle.fill"
@@ -196,11 +183,8 @@ struct ControlsView: View {
         text: "Live"
       ) {
         Task {
-          if webrtcVM.isActive {
-            webrtcVM.stopSession()
-          } else {
-            await webrtcVM.startSession()
-          }
+          if webrtcVM.isActive { webrtcVM.stopSession() }
+          else { await webrtcVM.startSession() }
         }
       }
       .opacity(geminiVM.isGeminiActive ? 0.4 : 1.0)
