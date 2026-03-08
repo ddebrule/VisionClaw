@@ -84,10 +84,13 @@ enum GeminiConfig {
     """
 
   // Spectre Scout_IQ endpoints (injected at build time via Secrets.swift)
-  static var spectreTTSURL: String { Secrets.spectreTTSURL }
-  static var spectreScoutURL: String { Secrets.spectreScoutURL }
-  static var spectreActiveSessionURL: String { spectreScoutURL.hasSuffix("/active-session") ? spectreScoutURL : spectreScoutURL + "/active-session" }
-  static var spectreUserToken: String { Secrets.spectreUserToken }
+  static var spectreTTSURL: String { Secrets.spectreTTSURL.trimmingCharacters(in: .whitespacesAndNewlines) }
+  static var spectreScoutURL: String { Secrets.spectreScoutURL.trimmingCharacters(in: .whitespacesAndNewlines) }
+  static var spectreActiveSessionURL: String {
+    let base = spectreScoutURL
+    return base.hasSuffix("/active-session") ? base : base + "/active-session"
+  }
+  static var spectreUserToken: String { Secrets.spectreUserToken.trimmingCharacters(in: .whitespacesAndNewlines) }
 
   // User-configurable values
   static var apiKey: String { SettingsManager.shared.geminiAPIKey }
