@@ -1,10 +1,9 @@
 import Foundation
 
 enum GeminiConfig {
-  static let websocketBaseURL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+  static let websocketBaseURL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
 
   // gemini-2.0-flash-live-001 supports responseModalities: ["TEXT"]
-  // The audio-native preview model does not.
   static let model = "models/gemini-2.0-flash-live-001"
 
   static let inputAudioSampleRate: Double = 16000
