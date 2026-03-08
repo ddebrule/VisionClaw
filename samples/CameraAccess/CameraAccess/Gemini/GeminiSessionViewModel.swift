@@ -1,5 +1,114 @@
 import Foundation
 import SwiftUI
+import AVFoundation
+
+// MARK: - Scout data types
+
+struct ScoutTranscriptEntry {
+  let role: String  // "user" or "assistant"
+  let text: String
+}
+
+// MARK: - ScoutTTSService
+
+@MainActor
+class ScoutTTSService: NSObject, AVAudioPlayerDelegate {
+  private var player: AVAudioPlayer?
+  private let session: URLSession
+  var onSpeakEnd: (() -> Void)?
+
+  override init() {
+    let config = URLSessionConfiguration.default
+    config.timeoutIntervalForRequest = 30
+    self.session = URLSession(configuration: config)
+    super.init()
+  }
+
+  func speak(_ text: String) async {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty,
+          GeminiConfig.isSpectreConfigured,
+          let url = URL(string: GeminiConfig.spectreTTSURL) else {
+      onSpeakEnd?()
+      return
+    }
+
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue(GeminiConfig.spectreUserToken, forHTTPHeaderField: "X-Scout-Token")
+
+    let body: [String: Any] = ["text": trimmed, "provider": "elevenlabs"]
+    guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
+      onSpeakEnd?()
+      return
+    }
+    request.httpBody = bodyData
+
+    do {
+      let (data, response) = try await session.data(for: request)
+      guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+        NSLog("[ScoutTTS] Non-200: %d", (response as? HTTPURLResponse)?.statusCode ?? 0)
+        onSpeakEnd?()
+        return
+      }
+      player?.stop()
+      player = try AVAudioPlayer(data: data)
+      player?.delegate = self
+      player?.play()
+    } catch {
+      NSLog("[ScoutTTS] Error: %@", error.localizedDescription)
+      onSpeakEnd?()
+    }
+  }
+
+  func stop() {
+    player?.stop()
+    player = nil
+  }
+
+  nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+    Task { @MainActor in self.onSpeakEnd?() }
+  }
+}
+
+// MARK: - SpectreScoutBridge
+
+@MainActor
+class SpectreScoutBridge {
+  private let session: URLSession
+
+  init() {
+    let config = URLSessionConfiguration.default
+    config.timeoutIntervalForRequest = 60
+    self.session = URLSession(configuration: config)
+  }
+
+  func sendReport(sessionId: String, transcript: [ScoutTranscriptEntry], durationMin: Int) async throws {
+    guard let url = URL(string: GeminiConfig.spectreScoutURL) else { throw URLError(.badURL) }
+
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue(GeminiConfig.spectreUserToken, forHTTPHeaderField: "X-Scout-Token")
+
+    let transcriptArray = transcript.map { ["role": $0.role, "text": $0.text] }
+    let body: [String: Any] = [
+      "session_id": sessionId,
+      "transcript": transcriptArray,
+      "duration_min": durationMin,
+    ]
+
+    request.httpBody = try JSONSerialization.data(withJSONObject: body)
+    let (_, response) = try await session.data(for: request)
+    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+      throw URLError(.badServerResponse)
+    }
+    NSLog("[SpectreScout] Report sent. %d turns, %d min", transcript.count, durationMin)
+  }
+}
+
+// MARK: - GeminiSessionViewModel
 
 @MainActor
 class GeminiSessionViewModel: ObservableObject {
@@ -11,6 +120,12 @@ class GeminiSessionViewModel: ObservableObject {
   @Published var aiTranscript: String = ""
   @Published var toolCallStatus: ToolCallStatus = .idle
   @Published var openClawConnectionState: OpenClawConnectionState = .notConfigured
+  @Published var isSendingScoutReport: Bool = false
+  @Published var scoutReportSent: Bool = false
+
+  /// Set this to the Spectre live session ID before starting Scout_IQ
+  var spectreSessionId: String = ""
+
   private let geminiService = GeminiLiveService()
   private let openClawBridge = OpenClawBridge()
   private var toolCallRouter: ToolCallRouter?
@@ -18,24 +133,33 @@ class GeminiSessionViewModel: ObservableObject {
   private var lastVideoFrameTime: Date = .distantPast
   private var stateObservation: Task<Void, Never>?
 
+  // Scout_IQ
+  private let scoutTTS = ScoutTTSService()
+  private let scoutBridge = SpectreScoutBridge()
+  private var scoutHistory: [ScoutTranscriptEntry] = []
+  private var scoutStartTime: Date?
+  private var pendingUserText: String = ""
+  private var pendingAIText: String = ""
+
   var streamingMode: StreamingMode = .glasses
 
   func startSession() async {
     guard !isGeminiActive else { return }
-
     guard GeminiConfig.isConfigured else {
-      errorMessage = "Gemini API key not configured. Open GeminiConfig.swift and replace YOUR_GEMINI_API_KEY with your key from https://aistudio.google.com/apikey"
+      errorMessage = "Gemini API key not configured."
       return
     }
 
     isGeminiActive = true
+    scoutHistory = []
+    scoutStartTime = Date()
+    pendingUserText = ""
+    pendingAIText = ""
+    scoutReportSent = false
 
-    // Wire audio callbacks
     audioManager.onAudioCaptured = { [weak self] data in
       guard let self else { return }
       Task { @MainActor in
-        // Mute mic while model speaks when speaker is on the phone
-        // (loudspeaker + co-located mic overwhelms iOS echo cancellation)
         let speakerOnPhone = self.streamingMode == .iPhone || SettingsManager.shared.speakerOutputEnabled
         if speakerOnPhone && self.geminiService.isModelSpeaking { return }
         self.geminiService.sendAudio(data: data)
@@ -46,15 +170,38 @@ class GeminiSessionViewModel: ObservableObject {
       self?.audioManager.playAudio(data: data)
     }
 
+    // TEXT mode: Gemini text chunks -> display + buffer for TTS
+    geminiService.onTextReceived = { [weak self] text in
+      guard let self else { return }
+      Task { @MainActor in
+        self.aiTranscript += text
+        self.pendingAIText += text
+      }
+    }
+
     geminiService.onInterrupted = { [weak self] in
       self?.audioManager.stopPlayback()
+      self?.scoutTTS.stop()
     }
 
     geminiService.onTurnComplete = { [weak self] in
       guard let self else { return }
       Task { @MainActor in
-        // Clear user transcript when AI finishes responding
+        if !self.pendingUserText.isEmpty {
+          self.scoutHistory.append(ScoutTranscriptEntry(role: "user", text: self.pendingUserText))
+        }
+        let aiText = self.pendingAIText
+        if !aiText.isEmpty {
+          self.scoutHistory.append(ScoutTranscriptEntry(role: "assistant", text: aiText))
+          self.scoutTTS.onSpeakEnd = { [weak self] in
+            Task { @MainActor in self?.isModelSpeaking = false }
+          }
+          Task { await self.scoutTTS.speak(aiText) }
+        }
+        self.pendingUserText = ""
+        self.pendingAIText = ""
         self.userTranscript = ""
+        self.aiTranscript = ""
       }
     }
 
@@ -62,6 +209,7 @@ class GeminiSessionViewModel: ObservableObject {
       guard let self else { return }
       Task { @MainActor in
         self.userTranscript += text
+        self.pendingUserText += text
         self.aiTranscript = ""
       }
     }
@@ -73,7 +221,6 @@ class GeminiSessionViewModel: ObservableObject {
       }
     }
 
-    // Handle unexpected disconnection
     geminiService.onDisconnected = { [weak self] reason in
       guard let self else { return }
       Task { @MainActor in
@@ -83,11 +230,9 @@ class GeminiSessionViewModel: ObservableObject {
       }
     }
 
-    // Check OpenClaw connectivity and start fresh session
     await openClawBridge.checkConnection()
     openClawBridge.resetSession()
 
-    // Wire tool call handling
     toolCallRouter = ToolCallRouter(bridge: openClawBridge)
 
     geminiService.onToolCall = { [weak self] toolCall in
@@ -108,11 +253,10 @@ class GeminiSessionViewModel: ObservableObject {
       }
     }
 
-    // Observe service state
     stateObservation = Task { [weak self] in
       guard let self else { return }
       while !Task.isCancelled {
-        try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+        try? await Task.sleep(nanoseconds: 100_000_000)
         guard !Task.isCancelled else { break }
         self.connectionState = self.geminiService.connectionState
         self.isModelSpeaking = self.geminiService.isModelSpeaking
@@ -121,7 +265,6 @@ class GeminiSessionViewModel: ObservableObject {
       }
     }
 
-    // Setup audio
     do {
       try audioManager.setupAudioSession(useIPhoneMode: streamingMode == .iPhone)
     } catch {
@@ -130,16 +273,11 @@ class GeminiSessionViewModel: ObservableObject {
       return
     }
 
-    // Connect to Gemini and wait for setupComplete
     let setupOk = await geminiService.connect()
-
     if !setupOk {
       let msg: String
-      if case .error(let err) = geminiService.connectionState {
-        msg = err
-      } else {
-        msg = "Failed to connect to Gemini"
-      }
+      if case .error(let err) = geminiService.connectionState { msg = err }
+      else { msg = "Failed to connect to Gemini" }
       errorMessage = msg
       geminiService.disconnect()
       stateObservation?.cancel()
@@ -149,7 +287,6 @@ class GeminiSessionViewModel: ObservableObject {
       return
     }
 
-    // Start mic capture
     do {
       try audioManager.startCapture()
     } catch {
@@ -166,6 +303,7 @@ class GeminiSessionViewModel: ObservableObject {
   func stopSession() {
     toolCallRouter?.cancelAll()
     toolCallRouter = nil
+    scoutTTS.stop()
     audioManager.stopCapture()
     geminiService.disconnect()
     stateObservation?.cancel()
@@ -176,6 +314,31 @@ class GeminiSessionViewModel: ObservableObject {
     userTranscript = ""
     aiTranscript = ""
     toolCallStatus = .idle
+    pendingUserText = ""
+    pendingAIText = ""
+  }
+
+  /// Send accumulated field report to Spectre Setup_IQ and end the session.
+  func endScout() async {
+    guard !spectreSessionId.isEmpty, !scoutHistory.isEmpty else {
+      stopSession()
+      return
+    }
+    isSendingScoutReport = true
+    stopSession()
+    let duration = scoutStartTime.map { Int(Date().timeIntervalSince($0) / 60) } ?? 0
+    do {
+      try await scoutBridge.sendReport(
+        sessionId: spectreSessionId,
+        transcript: scoutHistory,
+        durationMin: duration
+      )
+      scoutReportSent = true
+    } catch {
+      NSLog("[ScoutVM] Failed to send report: %@", error.localizedDescription)
+      errorMessage = "Scout report failed to send. Check your connection."
+    }
+    isSendingScoutReport = false
   }
 
   func sendVideoFrameIfThrottled(image: UIImage) {
@@ -185,5 +348,4 @@ class GeminiSessionViewModel: ObservableObject {
     lastVideoFrameTime = now
     geminiService.sendVideoFrame(image: image)
   }
-
 }
