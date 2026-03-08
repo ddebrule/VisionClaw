@@ -57,32 +57,17 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             archive
 
-      - name: Export IPA
+      - name: Package IPA (unsigned)
         run: |
-          mkdir -p $RUNNER_TEMP/ipa
-          cat > /tmp/ExportOptions.plist << 'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>development</string>
-            <key>signingStyle</key>
-            <string>manual</string>
-            <key>stripSwiftSymbols</key>
-            <true/>
-          </dict>
-          </plist>
-          PLIST
-          xcodebuild \
-            -exportArchive \
-            -archivePath $RUNNER_TEMP/ScoutIQ.xcarchive \
-            -exportPath $RUNNER_TEMP/ipa \
-            -exportOptionsPlist /tmp/ExportOptions.plist
+          mkdir -p $RUNNER_TEMP/ipa/Payload
+          cp -r "$RUNNER_TEMP/ScoutIQ.xcarchive/Products/Applications/CameraAccess.app" \
+            "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -r ScoutIQ.ipa Payload/
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
           name: ScoutIQ-${{ github.sha }}
-          path: $RUNNER_TEMP/ipa/*.ipa
+          path: ${{ runner.temp }}/ipa/ScoutIQ.ipa
           retention-days: 30
