@@ -40,7 +40,7 @@ class GeminiLiveService: ObservableObject {
     self.urlSession = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
   }
 
-  func connect() async -> Bool {
+  func connect(systemInstruction: String? = nil) async -> Bool {
     guard let url = GeminiConfig.websocketURL() else {
       connectionState = .error("No API key configured")
       return false
@@ -152,9 +152,7 @@ class GeminiLiveService: ObservableObject {
             "voiceConfig": ["prebuiltVoiceConfig": ["voiceName": "Charon"]]
           ]
         ],
-        "systemInstruction": [
-          "parts": [["text": GeminiConfig.systemInstruction]]
-        ],
+        "systemInstruction": ["parts": [["text": systemInstruction ?? GeminiConfig.systemInstruction]]],
         "tools": [["functionDeclarations": ToolDeclarations.allDeclarations()]],
         "realtimeInputConfig": [
           "automaticActivityDetection": [
