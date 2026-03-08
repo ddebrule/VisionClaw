@@ -15,7 +15,7 @@ class GeminiLiveService: ObservableObject {
   @Published var isModelSpeaking: Bool = false
 
   var onAudioReceived: ((Data) -> Void)?
-  var onTextReceived: ((String) -> Void)?   // TEXT output mode chunks
+  var onTextReceived: ((String) -> Void)?   // unused in AUDIO mode, kept for compatibility
   var onTurnComplete: (() -> Void)?
   var onInterrupted: (() -> Void)?
   var onDisconnected: ((String?) -> Void)?
@@ -147,8 +147,10 @@ class GeminiLiveService: ObservableObject {
       "setup": [
         "model": GeminiConfig.model,
         "generationConfig": [
-          "responseModalities": ["TEXT"],
-          "thinkingConfig": ["thinkingBudget": 0]
+          "responseModalities": ["AUDIO"],
+          "speechConfig": [
+            "voiceConfig": ["prebuiltVoiceConfig": ["voiceName": "Aoede"]]
+          ]
         ],
         "systemInstruction": [
           "parts": [["text": GeminiConfig.systemInstruction]]
@@ -165,7 +167,8 @@ class GeminiLiveService: ObservableObject {
           "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
           "turnCoverage": "TURN_INCLUDES_ALL_INPUT"
         ],
-        "inputAudioTranscription": [:] as [String: Any]
+        "inputAudioTranscription": [:] as [String: Any],
+        "outputAudioTranscription": [:] as [String: Any]
       ]
     ]
     sendJSON(setup)
@@ -226,13 +229,11 @@ class GeminiLiveService: ObservableObject {
     }
 
     if let toolCall = GeminiToolCall(json: json) {
-      NSLog("[Gemini] Tool call received: %d function(s)", toolCall.functionCalls.count)
       onToolCall?(toolCall)
       return
     }
 
     if let cancellation = GeminiToolCallCancellation(json: json) {
-      NSLog("[Gemini] Tool call cancellation: %@", cancellation.ids.joined(separator: ", "))
       onToolCallCancellation?(cancellation)
       return
     }
@@ -262,8 +263,6 @@ class GeminiLiveService: ObservableObject {
             }
             onAudioReceived?(audioData)
           } else if let textChunk = part["text"] as? String {
-            NSLog("[Gemini] %@", textChunk)
-            if !isModelSpeaking { isModelSpeaking = true }
             onTextReceived?(textChunk)
           }
         }
@@ -277,14 +276,12 @@ class GeminiLiveService: ObservableObject {
 
       if let inputTranscription = serverContent["inputTranscription"] as? [String: Any],
          let transcriptText = inputTranscription["text"] as? String, !transcriptText.isEmpty {
-        NSLog("[Gemini] You: %@", transcriptText)
         lastUserSpeechEnd = Date()
         responseLatencyLogged = false
         onInputTranscription?(transcriptText)
       }
       if let outputTranscription = serverContent["outputTranscription"] as? [String: Any],
          let transcriptText = outputTranscription["text"] as? String, !transcriptText.isEmpty {
-        NSLog("[Gemini] AI: %@", transcriptText)
         onOutputTranscription?(transcriptText)
       }
     }
