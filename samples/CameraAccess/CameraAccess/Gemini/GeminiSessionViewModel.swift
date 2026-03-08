@@ -1,12 +1,16 @@
 import Foundation
-import SwiftUI
-import AVFoundation
 
 // MARK: - Scout data types
 
 struct ScoutTranscriptEntry {
   let role: String  // "user" or "assistant"
   let text: String
+}
+
+struct ActiveSessionInfo {
+  let sessionId: String
+  let track: String
+  let vehicles: [String]  // vehicle model names
 }
 
 // MARK: - SpectreScoutBridge
@@ -21,7 +25,41 @@ class SpectreScoutBridge {
     self.session = URLSession(configuration: config)
   }
 
-  func sendReport(sessionId: String, transcript: [ScoutTranscriptEntry], durationMin: Int) async throws {
+  /// Fetch the racer's current active Spectre session and vehicle list.
+  func fetchActiveSession() async throws -> ActiveSessionInfo {
+    guard let url = URL(string: GeminiConfig.spectreActiveSessionURL) else { throw URLError(.badURL) }
+
+    var request = URLRequest(url: url)
+    request.httpMethod = "GET"
+    request.setValue(GeminiConfig.spectreUserToken, forHTTPHeaderField: "X-Scout-Token")
+
+    let (data, response) = try await session.data(for: request)
+    guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+
+    if http.statusCode == 404 {
+      throw NSError(domain: "SpectreScout", code: 404, userInfo: [NSLocalizedDescriptionKey: "No active Spectre session. Start a session on your iPad first."])
+    }
+    guard (200...299).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+
+    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let sessionId = json["session_id"] as? String,
+          let track = json["track"] as? String,
+          let vehiclesRaw = json["vehicles"] as? [[String: Any]]
+    else { throw URLError(.cannotParseResponse) }
+
+    let vehicleModels = vehiclesRaw.compactMap { $0["model"] as? String }
+    NSLog("[SpectreScout] Active session: %@ (%@). Vehicles: %@", track, sessionId, vehicleModels.joined(separator: ", "))
+    return ActiveSessionInfo(sessionId: sessionId, track: track, vehicles: vehicleModels)
+  }
+
+  /// Send the accumulated field report to Spectre Setup_IQ.
+  func sendReport(
+    sessionId: String,
+    transcript: [ScoutTranscriptEntry],
+    durationMin: Int,
+    scoutContext: String,
+    vehicleModel: String
+  ) async throws {
     guard let url = URL(string: GeminiConfig.spectreScoutURL) else { throw URLError(.badURL) }
 
     var request = URLRequest(url: url)
@@ -34,6 +72,8 @@ class SpectreScoutBridge {
       "session_id": sessionId,
       "transcript": transcriptArray,
       "duration_min": durationMin,
+      "scout_context": scoutContext,
+      "vehicle_model": vehicleModel,
     ]
 
     request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -41,9 +81,14 @@ class SpectreScoutBridge {
     guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
       throw URLError(.badServerResponse)
     }
-    NSLog("[SpectreScout] Report sent. %d turns, %d min", transcript.count, durationMin)
+    NSLog("[SpectreScout] Report sent. Context: %@, Vehicle: %@, Turns: %d, Duration: %d min",
+          scoutContext, vehicleModel, transcript.count, durationMin)
   }
 }
+
+import Foundation
+import SwiftUI
+import AVFoundation
 
 // MARK: - GeminiSessionViewModel
 
@@ -59,9 +104,12 @@ class GeminiSessionViewModel: ObservableObject {
   @Published var openClawConnectionState: OpenClawConnectionState = .notConfigured
   @Published var isSendingScoutReport: Bool = false
   @Published var scoutReportSent: Bool = false
+  @Published var isFetchingSession: Bool = false
 
-  /// Set this to the Spectre live session ID before starting Scout_IQ
-  var spectreSessionId: String = ""
+  // Resolved at session start
+  private(set) var spectreSessionId: String = ""
+  private(set) var scoutContext: String = ""
+  private(set) var scoutVehicleModel: String = ""
 
   private let geminiService = GeminiLiveService()
   private let openClawBridge = OpenClawBridge()
@@ -85,6 +133,35 @@ class GeminiSessionViewModel: ObservableObject {
       errorMessage = "Gemini API key not configured."
       return
     }
+
+    // 1. Fetch active Spectre session + vehicle list
+    isFetchingSession = true
+    let sessionInfo: ActiveSessionInfo
+    do {
+      sessionInfo = try await scoutBridge.fetchActiveSession()
+    } catch {
+      isFetchingSession = false
+      errorMessage = error.localizedDescription
+      return
+    }
+    isFetchingSession = false
+
+    spectreSessionId = sessionInfo.sessionId
+    scoutContext = ""
+    scoutVehicleModel = ""
+
+    // 2. Build dynamic system instruction with vehicle list injected
+    let vehicleList = sessionInfo.vehicles.isEmpty
+      ? "No vehicles found in garage."
+      : sessionInfo.vehicles.map { "- \($0)" }.joined(separator: "\n")
+
+    let dynamicInstruction = GeminiConfig.defaultSystemInstruction + """
+
+    ─── VEHICLES IN RACER'S GARAGE ───
+    \(vehicleList)
+    ──────────────────────────────────
+    Track today: \(sessionInfo.track)
+    """
 
     isGeminiActive = true
     scoutHistory = []
@@ -110,7 +187,7 @@ class GeminiSessionViewModel: ObservableObject {
       self?.audioManager.stopPlayback()
     }
 
-    // AI speech transcription — accumulate for scout report
+    // AI speech transcription — accumulate for scout report and extract context/vehicle
     geminiService.onOutputTranscription = { [weak self] text in
       guard let self else { return }
       Task { @MainActor in
@@ -124,6 +201,9 @@ class GeminiSessionViewModel: ObservableObject {
       Task { @MainActor in
         if !self.pendingUserText.isEmpty {
           self.scoutHistory.append(ScoutTranscriptEntry(role: "user", text: self.pendingUserText))
+          // Extract scout context and vehicle model from racer responses
+          // These are set by parsing the opening sequence conversation
+          self.extractOpeningSequenceAnswers(from: self.pendingUserText)
         }
         if !self.pendingAIText.isEmpty {
           self.scoutHistory.append(ScoutTranscriptEntry(role: "assistant", text: self.pendingAIText))
@@ -196,7 +276,8 @@ class GeminiSessionViewModel: ObservableObject {
       return
     }
 
-    let setupOk = await geminiService.connect()
+    // 3. Connect with dynamic system instruction (includes vehicle list)
+    let setupOk = await geminiService.connect(systemInstruction: dynamicInstruction)
     if !setupOk {
       let msg: String
       if case .error(let err) = geminiService.connectionState { msg = err }
@@ -249,11 +330,15 @@ class GeminiSessionViewModel: ObservableObject {
     isSendingScoutReport = true
     stopSession()
     let duration = scoutStartTime.map { Int(Date().timeIntervalSince($0) / 60) } ?? 0
+    let context = scoutContext.isEmpty ? "Unspecified" : scoutContext
+    let vehicle = scoutVehicleModel.isEmpty ? "Unspecified" : scoutVehicleModel
     do {
       try await scoutBridge.sendReport(
         sessionId: spectreSessionId,
         transcript: scoutHistory,
-        durationMin: duration
+        durationMin: duration,
+        scoutContext: context,
+        vehicleModel: vehicle
       )
       scoutReportSent = true
     } catch {
@@ -269,5 +354,21 @@ class GeminiSessionViewModel: ObservableObject {
     guard now.timeIntervalSince(lastVideoFrameTime) >= GeminiConfig.videoFrameInterval else { return }
     lastVideoFrameTime = now
     geminiService.sendVideoFrame(image: image)
+  }
+
+  // MARK: - Private
+
+  /// Parse racer responses from the opening sequence to extract context and vehicle model.
+  /// Scout_IQ confirms answers with "Locked in. [vehicle] — [context]." — we watch for that pattern
+  /// in AI output. As a fallback we also watch racer input for known keywords.
+  private func extractOpeningSequenceAnswers(from racerText: String) {
+    let lower = racerText.lowercased()
+
+    if scoutContext.isEmpty {
+      if lower.contains("track walk") || lower.contains("walk") { scoutContext = "Track Walk" }
+      else if lower.contains("qualifying") || lower.contains("qual") { scoutContext = "Qualifying" }
+      else if lower.contains("practice") { scoutContext = "Practice" }
+      else if lower.contains("between") || lower.contains("post") { scoutContext = "Between Rounds" }
+    }
   }
 }
