@@ -9,69 +9,6 @@ struct ScoutTranscriptEntry {
   let text: String
 }
 
-// MARK: - ScoutTTSService
-
-@MainActor
-class ScoutTTSService: NSObject, AVAudioPlayerDelegate {
-  private var player: AVAudioPlayer?
-  private let session: URLSession
-  var onSpeakEnd: (() -> Void)?
-
-  override init() {
-    let config = URLSessionConfiguration.default
-    config.timeoutIntervalForRequest = 30
-    self.session = URLSession(configuration: config)
-    super.init()
-  }
-
-  func speak(_ text: String) async {
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty,
-          GeminiConfig.isSpectreConfigured,
-          let url = URL(string: GeminiConfig.spectreTTSURL) else {
-      onSpeakEnd?()
-      return
-    }
-
-    var request = URLRequest(url: url)
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue(GeminiConfig.spectreUserToken, forHTTPHeaderField: "X-Scout-Token")
-
-    let body: [String: Any] = ["text": trimmed, "provider": "elevenlabs"]
-    guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
-      onSpeakEnd?()
-      return
-    }
-    request.httpBody = bodyData
-
-    do {
-      let (data, response) = try await session.data(for: request)
-      guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-        NSLog("[ScoutTTS] Non-200: %d", (response as? HTTPURLResponse)?.statusCode ?? 0)
-        onSpeakEnd?()
-        return
-      }
-      player?.stop()
-      player = try AVAudioPlayer(data: data)
-      player?.delegate = self
-      player?.play()
-    } catch {
-      NSLog("[ScoutTTS] Error: %@", error.localizedDescription)
-      onSpeakEnd?()
-    }
-  }
-
-  func stop() {
-    player?.stop()
-    player = nil
-  }
-
-  nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-    Task { @MainActor in self.onSpeakEnd?() }
-  }
-}
-
 // MARK: - SpectreScoutBridge
 
 @MainActor
@@ -133,8 +70,7 @@ class GeminiSessionViewModel: ObservableObject {
   private var lastVideoFrameTime: Date = .distantPast
   private var stateObservation: Task<Void, Never>?
 
-  // Scout_IQ
-  private let scoutTTS = ScoutTTSService()
+  // Scout_IQ transcript accumulation
   private let scoutBridge = SpectreScoutBridge()
   private var scoutHistory: [ScoutTranscriptEntry] = []
   private var scoutStartTime: Date?
@@ -170,18 +106,17 @@ class GeminiSessionViewModel: ObservableObject {
       self?.audioManager.playAudio(data: data)
     }
 
-    // TEXT mode: Gemini text chunks -> display + buffer for TTS
-    geminiService.onTextReceived = { [weak self] text in
+    geminiService.onInterrupted = { [weak self] in
+      self?.audioManager.stopPlayback()
+    }
+
+    // AI speech transcription — accumulate for scout report
+    geminiService.onOutputTranscription = { [weak self] text in
       guard let self else { return }
       Task { @MainActor in
         self.aiTranscript += text
         self.pendingAIText += text
       }
-    }
-
-    geminiService.onInterrupted = { [weak self] in
-      self?.audioManager.stopPlayback()
-      self?.scoutTTS.stop()
     }
 
     geminiService.onTurnComplete = { [weak self] in
@@ -190,13 +125,8 @@ class GeminiSessionViewModel: ObservableObject {
         if !self.pendingUserText.isEmpty {
           self.scoutHistory.append(ScoutTranscriptEntry(role: "user", text: self.pendingUserText))
         }
-        let aiText = self.pendingAIText
-        if !aiText.isEmpty {
-          self.scoutHistory.append(ScoutTranscriptEntry(role: "assistant", text: aiText))
-          self.scoutTTS.onSpeakEnd = { [weak self] in
-            Task { @MainActor in self?.isModelSpeaking = false }
-          }
-          Task { await self.scoutTTS.speak(aiText) }
+        if !self.pendingAIText.isEmpty {
+          self.scoutHistory.append(ScoutTranscriptEntry(role: "assistant", text: self.pendingAIText))
         }
         self.pendingUserText = ""
         self.pendingAIText = ""
@@ -211,13 +141,6 @@ class GeminiSessionViewModel: ObservableObject {
         self.userTranscript += text
         self.pendingUserText += text
         self.aiTranscript = ""
-      }
-    }
-
-    geminiService.onOutputTranscription = { [weak self] text in
-      guard let self else { return }
-      Task { @MainActor in
-        self.aiTranscript += text
       }
     }
 
@@ -303,7 +226,6 @@ class GeminiSessionViewModel: ObservableObject {
   func stopSession() {
     toolCallRouter?.cancelAll()
     toolCallRouter = nil
-    scoutTTS.stop()
     audioManager.stopCapture()
     geminiService.disconnect()
     stateObservation?.cancel()
