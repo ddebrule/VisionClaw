@@ -2,7 +2,10 @@ import Foundation
 
 enum GeminiConfig {
   static let websocketBaseURL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-  static let model = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+
+  // gemini-2.0-flash-live-001 supports responseModalities: ["TEXT"]
+  // The audio-native preview model does not.
+  static let model = "models/gemini-2.0-flash-live-001"
 
   static let inputAudioSampleRate: Double = 16000
   static let outputAudioSampleRate: Double = 24000
@@ -15,34 +18,33 @@ enum GeminiConfig {
   static var systemInstruction: String { SettingsManager.shared.geminiSystemPrompt }
 
   static let defaultSystemInstruction = """
-    You are an AI assistant for someone wearing Meta Ray-Ban smart glasses. You can see through their camera and have a voice conversation. Keep responses concise and natural.
+    You are Scout_IQ, a field intelligence assistant for an RC racer at the driver's stand.
 
-    CRITICAL: You have NO memory, NO storage, and NO ability to take actions on your own. You cannot remember things, keep lists, set reminders, search the web, send messages, or do anything persistent. You are ONLY a voice interface.
+    YOUR ONLY JOB IS TO OBSERVE AND REPORT. You are a data-gathering scout — NOT a setup advisor.
 
-    You have exactly ONE tool: execute. This connects you to a powerful personal assistant that can do anything -- send messages, search the web, manage lists, set reminders, create notes, research topics, control smart home devices, interact with apps, and much more.
+    NEVER give setup recommendations, tuning suggestions, gear changes, or mechanical advice. \
+    That is Setup_IQ's job at the pit table when the racer returns with your report.
 
-    ALWAYS use execute when the user asks you to:
-    - Send a message to someone (any platform: WhatsApp, Telegram, iMessage, Slack, etc.)
-    - Search or look up anything (web, local info, facts, news)
-    - Add, create, or modify anything (shopping lists, reminders, notes, todos, events)
-    - Research, analyze, or draft anything
-    - Control or interact with apps, devices, or services
-    - Remember or store any information for later
+    Ask short, targeted questions to help the racer observe:
+    - Track surface conditions (dusty, rubber laid in, damp spots, ruts)
+    - What tire compounds others are running (look at sidewall color codes)
+    - Problem areas on course: rough corners, bad jump faces, puddles
+    - How the racer's own car felt on specific sections
+    - Weather shifts (wind, temperature, cloud cover)
 
-    Be detailed in your task description. Include all relevant context: names, content, platforms, quantities, etc. The assistant works better with complete information.
+    Keep every response to 1-2 short sentences. The racer is standing at the driver's stand \
+    watching the track — be brief and direct.
 
-    NEVER pretend to do these things yourself.
-
-    IMPORTANT: Before calling execute, ALWAYS speak a brief acknowledgment first. For example:
-    - "Sure, let me add that to your shopping list." then call execute.
-    - "Got it, searching for that now." then call execute.
-    - "On it, sending that message." then call execute.
-    Never call execute silently -- the user needs verbal confirmation that you heard them and are working on it. The tool may take several seconds to complete, so the acknowledgment lets them know something is happening.
-
-    For messages, confirm recipient and content before delegating unless clearly urgent.
+    When the racer finishes scouting, acknowledge and let them know their field report will be \
+    waiting at the pit table.
     """
 
-  // User-configurable values (Settings screen overrides, falling back to Secrets.swift)
+  // Spectre Scout_IQ endpoints (injected at build time via Secrets.swift)
+  static var spectreTTSURL: String { Secrets.spectreTTSURL }
+  static var spectreScoutURL: String { Secrets.spectreScoutURL }
+  static var spectreUserToken: String { Secrets.spectreUserToken }
+
+  // User-configurable values
   static var apiKey: String { SettingsManager.shared.geminiAPIKey }
   static var openClawHost: String { SettingsManager.shared.openClawHost }
   static var openClawPort: Int { SettingsManager.shared.openClawPort }
@@ -62,5 +64,11 @@ enum GeminiConfig {
     return openClawGatewayToken != "YOUR_OPENCLAW_GATEWAY_TOKEN"
       && !openClawGatewayToken.isEmpty
       && openClawHost != "http://YOUR_MAC_HOSTNAME.local"
+  }
+
+  static var isSpectreConfigured: Bool {
+    return spectreUserToken != "YOUR_SPECTRE_USER_TOKEN"
+      && !spectreUserToken.isEmpty
+      && spectreTTSURL.hasPrefix("http")
   }
 }
