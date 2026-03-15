@@ -167,6 +167,11 @@ class GeminiLiveService: ObservableObject {
           "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
           "turnCoverage": "TURN_INCLUDES_ALL_INPUT"
         ],
+        "contextWindowCompression": [
+          "slidingWindow": [
+            "targetTokens": 80000
+          ]
+        ],
         "inputAudioTranscription": [:] as [String: Any],
         "outputAudioTranscription": [:] as [String: Any]
       ]
