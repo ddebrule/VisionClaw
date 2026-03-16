@@ -9,14 +9,14 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-26
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app
+        run: sudo xcode-select -s $(find /Applications -name 'Xcode*.app' -maxdepth 1 | sort -V | tail -1)
 
       - name: Inject Secrets.swift
         env:
