@@ -124,6 +124,7 @@ class GeminiSessionViewModel: ObservableObject {
   private var scoutStartTime: Date?
   private var pendingUserText: String = ""
   private var pendingAIText: String = ""
+  private var sessionVehicles: [String] = []  // vehicle model names from active session
 
   var streamingMode: StreamingMode = .glasses
 
@@ -149,6 +150,7 @@ class GeminiSessionViewModel: ObservableObject {
     spectreSessionId = sessionInfo.sessionId
     scoutContext = ""
     scoutVehicleModel = ""
+    sessionVehicles = sessionInfo.vehicles
 
     // 2. Build dynamic system instruction with vehicle list injected
     let vehicleList = sessionInfo.vehicles.isEmpty
@@ -369,6 +371,21 @@ class GeminiSessionViewModel: ObservableObject {
       else if lower.contains("qualifying") || lower.contains("qual") { scoutContext = "Qualifying" }
       else if lower.contains("practice") { scoutContext = "Practice" }
       else if lower.contains("between") || lower.contains("post") { scoutContext = "Between Rounds" }
+    }
+
+    if scoutVehicleModel.isEmpty {
+      for vehicle in sessionVehicles {
+        if lower.contains(vehicle.lowercased()) {
+          scoutVehicleModel = vehicle
+          break
+        }
+        // Also match individual words from the model name (e.g. "buggy" matches "Nitro Buggy")
+        let words = vehicle.lowercased().split(separator: " ")
+        if words.count > 1 && words.contains(where: { lower.contains($0) }) {
+          scoutVehicleModel = vehicle
+          break
+        }
+      }
     }
   }
 }
