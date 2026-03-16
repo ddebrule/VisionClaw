@@ -1,0 +1,113 @@
+name: Build and Deploy Scout_IQ
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 10 1 */2 *'  # Auto-rebuild every 2 months (1st of Jan, Mar, May, Jul, Sep, Nov)
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Inject Secrets.swift
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SPECTRE_TTS_URL: ${{ secrets.SPECTRE_TTS_URL }}
+          SPECTRE_SCOUT_URL: ${{ secrets.SPECTRE_SCOUT_URL }}
+          SPECTRE_USER_TOKEN: ${{ secrets.SPECTRE_USER_TOKEN }}
+        run: |
+          cat > samples/CameraAccess/CameraAccess/Secrets.swift << EOF
+          import Foundation
+
+          enum Secrets {
+            static let geminiAPIKey = "$GEMINI_API_KEY"
+            static let spectreTTSURL = "$SPECTRE_TTS_URL"
+            static let spectreScoutURL = "$SPECTRE_SCOUT_URL"
+            static let spectreUserToken = "$SPECTRE_USER_TOKEN"
+            static let openClawHost = "http://localhost"
+            static let openClawPort = 18789
+            static let openClawHookToken = ""
+            static let openClawGatewayToken = ""
+            static let webrtcSignalingURL = "ws://localhost:8080"
+          }
+          EOF
+
+      - name: Set build number
+        run: |
+          INFO_PLIST=$(find samples/CameraAccess -name "Info.plist" | head -1)
+          if [ -n "$INFO_PLIST" ]; then
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ github.run_number }}" "$INFO_PLIST"
+            echo "Set build number ${{ github.run_number }} in $INFO_PLIST"
+          else
+            echo "Info.plist not found — build number will use default"
+          fi
+
+      - name: Write App Store Connect API Key
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "${{ secrets.APP_STORE_CONNECT_API_KEY }}" > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project samples/CameraAccess/CameraAccess.xcodeproj \
+            -scheme CameraAccess
+
+      - name: Archive (signed)
+        run: |
+          xcodebuild \
+            -project samples/CameraAccess/CameraAccess.xcodeproj \
+            -scheme CameraAccess \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath $RUNNER_TEMP/ScoutIQ.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8 \
+            -authenticationKeyID ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }} \
+            -authenticationKeyIssuerID ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }} \
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM=VGWD36A4MQ \
+            archive
+
+      - name: Export IPA for App Store
+        run: |
+          cat > $RUNNER_TEMP/ExportOptions.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>teamID</key>
+            <string>VGWD36A4MQ</string>
+            <key>uploadSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/ScoutIQ.xcarchive \
+            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist \
+            -exportPath $RUNNER_TEMP/export \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}.p8 \
+            -authenticationKeyID ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }} \
+            -authenticationKeyIssuerID ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+
+      - name: Upload to TestFlight
+        run: |
+          xcrun altool --upload-app \
+            -f "$(find $RUNNER_TEMP/export -name '*.ipa' | head -1)" \
+            -t ios \
+            --apiKey ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }} \
+            --apiIssuer ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }} \
+            --verbose
