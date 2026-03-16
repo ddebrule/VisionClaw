@@ -41,6 +41,12 @@ jobs:
           }
           EOF
 
+      - name: Update bundle identifier
+        run: |
+          PBXPROJ="samples/CameraAccess/CameraAccess.xcodeproj/project.pbxproj"
+          sed -i '' 's/com\.xiaoanliu\.VisionClaw/com.xiaoanliu.VisionClaw.VGWD36A4MQ/g' "$PBXPROJ"
+          echo "Bundle ID updated to com.xiaoanliu.VisionClaw.VGWD36A4MQ"
+
       - name: Set build number
         run: |
           INFO_PLIST=$(find samples/CameraAccess -name "Info.plist" | head -1)
