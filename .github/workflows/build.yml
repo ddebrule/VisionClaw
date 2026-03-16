@@ -18,6 +18,9 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s $(find /Applications -name 'Xcode*.app' -maxdepth 1 | sort -V | tail -1)
 
+      - name: Install iOS platform
+        run: xcodebuild -downloadPlatform iOS
+
       - name: Inject Secrets.swift
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
