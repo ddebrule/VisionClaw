@@ -3,7 +3,7 @@ import Foundation
 enum GeminiConfig {
   // Original audio-native model — uses v1alpha endpoint
   static let websocketBaseURL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
-  static let model = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+  static let model = "models/gemini-3.1-flash-live-preview"
 
   static let inputAudioSampleRate: Double = 16000
   static let outputAudioSampleRate: Double = 24000
