@@ -145,6 +145,13 @@ class GeminiLiveService: ObservableObject {
   }
 
   private func sendSetupMessage() {
+    // The `execute` tool routes through the OpenClaw gateway. Only advertise it to
+    // Gemini when OpenClaw is actually configured — otherwise the model is nudged to
+    // call a tool that can't reach a backend, producing failed tool calls.
+    let tools: [[String: Any]] = GeminiConfig.isOpenClawConfigured
+      ? [["functionDeclarations": ToolDeclarations.allDeclarations()]]
+      : []
+
     let setup: [String: Any] = [
       "setup": [
         "model": GeminiConfig.model,
@@ -155,7 +162,7 @@ class GeminiLiveService: ObservableObject {
           ]
         ],
         "systemInstruction": ["parts": [["text": pendingSystemInstruction ?? GeminiConfig.systemInstruction]]],
-        "tools": [["functionDeclarations": ToolDeclarations.allDeclarations()]],
+        "tools": tools,
         "realtimeInputConfig": [
           "automaticActivityDetection": [
             "disabled": false,
