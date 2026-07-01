@@ -1,0 +1,34 @@
+name: Keepalive + Rebuild
+
+on:
+  schedule:
+    - cron: '23 8 * * 1'      # weekly, Mondays ~08:23 UTC (off-peak minute)
+  workflow_dispatch:
+
+permissions:
+  contents: write             # push the keepalive commit
+  actions: write              # enable + dispatch the build workflow
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebuild + keepalive if idle >= 45 days
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          days=$(( ( $(date +%s) - $(git log -1 --format=%ct) ) / 86400 ))
+          echo "Days since last commit: $days"
+          if [ "$days" -ge 45 ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore: keepalive rebuild (prevent 60-day auto-disable)"
+            git push
+            gh workflow enable build.yml    # self-heal if it ever got disabled
+            gh workflow run   build.yml --ref main
+          else
+            echo "Repo active within 45 days — nothing to do."
+          fi
