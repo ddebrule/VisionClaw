@@ -42,30 +42,18 @@ fun SettingsScreen(
 ) {
     var geminiAPIKey by remember { mutableStateOf(SettingsManager.geminiAPIKey) }
     var systemPrompt by remember { mutableStateOf(SettingsManager.geminiSystemPrompt) }
-    var openClawHost by remember { mutableStateOf(SettingsManager.openClawHost) }
-    var openClawPort by remember { mutableStateOf(SettingsManager.openClawPort.toString()) }
-    var openClawHookToken by remember { mutableStateOf(SettingsManager.openClawHookToken) }
-    var openClawGatewayToken by remember { mutableStateOf(SettingsManager.openClawGatewayToken) }
     var webrtcSignalingURL by remember { mutableStateOf(SettingsManager.webrtcSignalingURL) }
     var showResetDialog by remember { mutableStateOf(false) }
 
     fun save() {
         SettingsManager.geminiAPIKey = geminiAPIKey.trim()
         SettingsManager.geminiSystemPrompt = systemPrompt.trim()
-        SettingsManager.openClawHost = openClawHost.trim()
-        openClawPort.trim().toIntOrNull()?.let { SettingsManager.openClawPort = it }
-        SettingsManager.openClawHookToken = openClawHookToken.trim()
-        SettingsManager.openClawGatewayToken = openClawGatewayToken.trim()
         SettingsManager.webrtcSignalingURL = webrtcSignalingURL.trim()
     }
 
     fun reload() {
         geminiAPIKey = SettingsManager.geminiAPIKey
         systemPrompt = SettingsManager.geminiSystemPrompt
-        openClawHost = SettingsManager.openClawHost
-        openClawPort = SettingsManager.openClawPort.toString()
-        openClawHookToken = SettingsManager.openClawHookToken
-        openClawGatewayToken = SettingsManager.openClawGatewayToken
         webrtcSignalingURL = SettingsManager.webrtcSignalingURL
     }
 
@@ -106,35 +94,6 @@ fun SettingsScreen(
                 label = { Text("System prompt") },
                 modifier = Modifier.fillMaxWidth().height(200.dp),
                 textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-            )
-
-            // OpenClaw section
-            SectionHeader("OpenClaw")
-            MonoTextField(
-                value = openClawHost,
-                onValueChange = { openClawHost = it },
-                label = "Host",
-                placeholder = "http://your-mac.local",
-                keyboardType = KeyboardType.Uri,
-            )
-            MonoTextField(
-                value = openClawPort,
-                onValueChange = { openClawPort = it },
-                label = "Port",
-                placeholder = "18789",
-                keyboardType = KeyboardType.Number,
-            )
-            MonoTextField(
-                value = openClawHookToken,
-                onValueChange = { openClawHookToken = it },
-                label = "Hook Token",
-                placeholder = "Hook token",
-            )
-            MonoTextField(
-                value = openClawGatewayToken,
-                onValueChange = { openClawGatewayToken = it },
-                label = "Gateway Token",
-                placeholder = "Gateway auth token",
             )
 
             // WebRTC section
