@@ -21,8 +21,6 @@ class GeminiLiveService: ObservableObject {
   var onDisconnected: ((String?) -> Void)?
   var onInputTranscription: ((String) -> Void)?
   var onOutputTranscription: ((String) -> Void)?
-  var onToolCall: ((GeminiToolCall) -> Void)?
-  var onToolCallCancellation: ((GeminiToolCallCancellation) -> Void)?
 
   private var lastUserSpeechEnd: Date?
   private var responseLatencyLogged = false
@@ -101,8 +99,6 @@ class GeminiLiveService: ObservableObject {
     delegate.onOpen = nil
     delegate.onClose = nil
     delegate.onError = nil
-    onToolCall = nil
-    onToolCallCancellation = nil
     connectionState = .disconnected
     isModelSpeaking = false
     resolveConnect(success: false)
@@ -131,10 +127,6 @@ class GeminiLiveService: ObservableObject {
     }
   }
 
-  func sendToolResponse(_ response: [String: Any]) {
-    sendQueue.async { [weak self] in self?.sendJSON(response) }
-  }
-
   // MARK: - Private
 
   private func resolveConnect(success: Bool) {
@@ -145,13 +137,6 @@ class GeminiLiveService: ObservableObject {
   }
 
   private func sendSetupMessage() {
-    // The `execute` tool routes through the OpenClaw gateway. Only advertise it to
-    // Gemini when OpenClaw is actually configured — otherwise the model is nudged to
-    // call a tool that can't reach a backend, producing failed tool calls.
-    let tools: [[String: Any]] = GeminiConfig.isOpenClawConfigured
-      ? [["functionDeclarations": ToolDeclarations.allDeclarations()]]
-      : []
-
     let setup: [String: Any] = [
       "setup": [
         "model": GeminiConfig.model,
@@ -162,7 +147,6 @@ class GeminiLiveService: ObservableObject {
           ]
         ],
         "systemInstruction": ["parts": [["text": pendingSystemInstruction ?? GeminiConfig.systemInstruction]]],
-        "tools": tools,
         "realtimeInputConfig": [
           "automaticActivityDetection": [
             "disabled": false,
@@ -237,16 +221,6 @@ class GeminiLiveService: ObservableObject {
       connectionState = .disconnected
       isModelSpeaking = false
       onDisconnected?("Server closing (time left: \(seconds)s)")
-      return
-    }
-
-    if let toolCall = GeminiToolCall(json: json) {
-      onToolCall?(toolCall)
-      return
-    }
-
-    if let cancellation = GeminiToolCallCancellation(json: json) {
-      onToolCallCancellation?(cancellation)
       return
     }
 
