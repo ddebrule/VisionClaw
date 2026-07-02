@@ -100,8 +100,6 @@ class GeminiSessionViewModel: ObservableObject {
   @Published var errorMessage: String?
   @Published var userTranscript: String = ""
   @Published var aiTranscript: String = ""
-  @Published var toolCallStatus: ToolCallStatus = .idle
-  @Published var openClawConnectionState: OpenClawConnectionState = .notConfigured
   @Published var isSendingScoutReport: Bool = false
   @Published var scoutReportSent: Bool = false
   @Published var isFetchingSession: Bool = false
@@ -112,8 +110,6 @@ class GeminiSessionViewModel: ObservableObject {
   private(set) var scoutVehicleModel: String = ""
 
   private let geminiService = GeminiLiveService()
-  private let openClawBridge = OpenClawBridge()
-  private var toolCallRouter: ToolCallRouter?
   private let audioManager = AudioManager()
   private var lastVideoFrameTime: Date = .distantPast
   private var stateObservation: Task<Void, Never>?
@@ -235,29 +231,6 @@ class GeminiSessionViewModel: ObservableObject {
       }
     }
 
-    await openClawBridge.checkConnection()
-    openClawBridge.resetSession()
-
-    toolCallRouter = ToolCallRouter(bridge: openClawBridge)
-
-    geminiService.onToolCall = { [weak self] toolCall in
-      guard let self else { return }
-      Task { @MainActor in
-        for call in toolCall.functionCalls {
-          self.toolCallRouter?.handleToolCall(call) { [weak self] response in
-            self?.geminiService.sendToolResponse(response)
-          }
-        }
-      }
-    }
-
-    geminiService.onToolCallCancellation = { [weak self] cancellation in
-      guard let self else { return }
-      Task { @MainActor in
-        self.toolCallRouter?.cancelToolCalls(ids: cancellation.ids)
-      }
-    }
-
     stateObservation = Task { [weak self] in
       guard let self else { return }
       while !Task.isCancelled {
@@ -265,8 +238,6 @@ class GeminiSessionViewModel: ObservableObject {
         guard !Task.isCancelled else { break }
         self.connectionState = self.geminiService.connectionState
         self.isModelSpeaking = self.geminiService.isModelSpeaking
-        self.toolCallStatus = self.openClawBridge.lastToolCallStatus
-        self.openClawConnectionState = self.openClawBridge.connectionState
       }
     }
 
@@ -307,8 +278,6 @@ class GeminiSessionViewModel: ObservableObject {
   }
 
   func stopSession() {
-    toolCallRouter?.cancelAll()
-    toolCallRouter = nil
     audioManager.stopCapture()
     geminiService.disconnect()
     stateObservation?.cancel()
@@ -318,7 +287,6 @@ class GeminiSessionViewModel: ObservableObject {
     isModelSpeaking = false
     userTranscript = ""
     aiTranscript = ""
-    toolCallStatus = .idle
     pendingUserText = ""
     pendingAIText = ""
   }
