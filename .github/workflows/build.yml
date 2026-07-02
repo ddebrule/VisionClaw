@@ -36,10 +36,6 @@ jobs:
             static let spectreTTSURL = "$SPECTRE_TTS_URL"
             static let spectreScoutURL = "$SPECTRE_SCOUT_URL"
             static let spectreUserToken = "$SPECTRE_USER_TOKEN"
-            static let openClawHost = "http://localhost"
-            static let openClawPort = 18789
-            static let openClawHookToken = ""
-            static let openClawGatewayToken = ""
             static let webrtcSignalingURL = "ws://localhost:8080"
           }
           EOF
