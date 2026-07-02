@@ -6,7 +6,7 @@ A real-time AI assistant for Meta Ray-Ban smart glasses. See what you see, hear 
 
 ![Cover](assets/cover.png)
 
-Built on [Meta Wearables DAT SDK](https://github.com/facebook/meta-wearables-dat-ios) (iOS) / [DAT Android SDK](https://github.com/nichochar/openclaw) (Android) + [Gemini Live API](https://ai.google.dev/gemini-api/docs/live) + [OpenClaw](https://github.com/nichochar/openclaw) (optional).
+Built on [Meta Wearables DAT SDK](https://github.com/facebook/meta-wearables-dat-ios) (iOS) / DAT Android SDK (Android) + [Gemini Live API](https://ai.google.dev/gemini-api/docs/live).
 
 **Supported platforms:** iOS (iPhone) and Android (Pixel, Samsung, etc.)
 
@@ -15,9 +15,6 @@ Built on [Meta Wearables DAT SDK](https://github.com/facebook/meta-wearables-dat
 Put on your glasses, tap the AI button, and talk:
 
 - **"What am I looking at?"** -- Gemini sees through your glasses camera and describes the scene
-- **"Add milk to my shopping list"** -- delegates to OpenClaw, which adds it via your connected apps
-- **"Send a message to John saying I'll be late"** -- routes through OpenClaw to WhatsApp/Telegram/iMessage
-- **"Search for the best coffee shops nearby"** -- web search via OpenClaw, results spoken back
 
 The glasses camera streams at ~1fps to Gemini for visual context, while audio flows bidirectionally in real-time.
 
@@ -37,14 +34,6 @@ iOS / Android App (this project)
 Gemini Live API (WebSocket)
        |
        |-- Audio response (PCM 24kHz) --> App --> Speaker
-       |-- Tool calls (execute) -------> App --> OpenClaw Gateway
-       |                                              |
-       |                                              v
-       |                                      56+ skills: web search,
-       |                                      messaging, smart home,
-       |                                      notes, reminders, etc.
-       |                                              |
-       |<---- Tool response (text) <----- App <-------+
        |
        v
   Gemini speaks the result
@@ -52,7 +41,6 @@ Gemini Live API (WebSocket)
 
 **Key pieces:**
 - **Gemini Live** -- real-time voice + vision AI over WebSocket (native audio, not STT-first)
-- **OpenClaw** (optional) -- local gateway that gives Gemini access to 56+ tools and all your connected apps
 - **Phone mode** -- test the full pipeline using your phone camera instead of glasses
 - **WebRTC streaming** -- share your glasses POV live to a browser viewer
 
@@ -76,7 +64,7 @@ Copy the example file and fill in your values:
 cp CameraAccess/Secrets.swift.example CameraAccess/Secrets.swift
 ```
 
-Edit `Secrets.swift` with your [Gemini API key](https://aistudio.google.com/apikey) (required) and optional OpenClaw/WebRTC config.
+Edit `Secrets.swift` with your [Gemini API key](https://aistudio.google.com/apikey) (required) and optional WebRTC config.
 
 ### 3. Build and run
 
@@ -139,7 +127,7 @@ cd samples/CameraAccessAndroid/app/src/main/java/com/meta/wearable/dat/externals
 cp Secrets.kt.example Secrets.kt
 ```
 
-Edit `Secrets.kt` with your [Gemini API key](https://aistudio.google.com/apikey) (required) and optional OpenClaw/WebRTC config.
+Edit `Secrets.kt` with your [Gemini API key](https://aistudio.google.com/apikey) (required) and optional WebRTC config.
 
 ### 4. Build and run
 
@@ -164,75 +152,6 @@ Enable Developer Mode in the Meta AI app (same steps as iOS above), then:
 
 ---
 
-## Setup: OpenClaw (Optional)
-
-OpenClaw gives Gemini the ability to take real-world actions: send messages, search the web, manage lists, control smart home devices, and more. Without it, Gemini is voice + vision only.
-
-### 1. Install and configure OpenClaw
-
-Follow the [OpenClaw setup guide](https://github.com/nichochar/openclaw). Make sure the gateway is enabled:
-
-In `~/.openclaw/openclaw.json`:
-
-```json
-{
-  "gateway": {
-    "port": 18789,
-    "bind": "lan",
-    "auth": {
-      "mode": "token",
-      "token": "your-gateway-token-here"
-    },
-    "http": {
-      "endpoints": {
-        "chatCompletions": { "enabled": true }
-      }
-    }
-  }
-}
-```
-
-Key settings:
-- `bind: "lan"` -- exposes the gateway on your local network so your phone can reach it
-- `chatCompletions.enabled: true` -- enables the `/v1/chat/completions` endpoint (off by default)
-- `auth.token` -- the token your app will use to authenticate
-
-### 2. Configure the app
-
-**iOS** -- In `Secrets.swift`:
-```swift
-static let openClawHost = "http://Your-Mac.local"
-static let openClawPort = 18789
-static let openClawGatewayToken = "your-gateway-token-here"
-```
-
-**Android** -- In `Secrets.kt`:
-```kotlin
-const val openClawHost = "http://Your-Mac.local"
-const val openClawPort = 18789
-const val openClawGatewayToken = "your-gateway-token-here"
-```
-
-To find your Mac's Bonjour hostname: **System Settings > General > Sharing** -- it's shown at the top (e.g., `Johns-MacBook-Pro.local`).
-
-> Both iOS and Android also have an in-app Settings screen where you can change these values at runtime without editing source code.
-
-### 3. Start the gateway
-
-```bash
-openclaw gateway restart
-```
-
-Verify it's running:
-
-```bash
-curl http://localhost:18789/health
-```
-
-Now when you talk to the AI, it can execute tasks through OpenClaw.
-
----
-
 ## Architecture
 
 ### Key Files (iOS)
@@ -244,10 +163,7 @@ All source code is in `samples/CameraAccess/CameraAccess/`:
 | `Gemini/GeminiConfig.swift` | API keys, model config, system prompt |
 | `Gemini/GeminiLiveService.swift` | WebSocket client for Gemini Live API |
 | `Gemini/AudioManager.swift` | Mic capture (PCM 16kHz) + audio playback (PCM 24kHz) |
-| `Gemini/GeminiSessionViewModel.swift` | Session lifecycle, tool call wiring, transcript state |
-| `OpenClaw/ToolCallModels.swift` | Tool declarations, data types |
-| `OpenClaw/OpenClawBridge.swift` | HTTP client for OpenClaw gateway |
-| `OpenClaw/ToolCallRouter.swift` | Routes Gemini tool calls to OpenClaw |
+| `Gemini/GeminiSessionViewModel.swift` | Session lifecycle, transcript state |
 | `iPhone/IPhoneCameraManager.swift` | AVCaptureSession wrapper for iPhone camera mode |
 | `WebRTC/WebRTCClient.swift` | WebRTC peer connection + SDP negotiation |
 | `WebRTC/SignalingClient.swift` | WebSocket signaling for WebRTC rooms |
@@ -261,10 +177,7 @@ All source code is in `samples/CameraAccessAndroid/app/src/main/java/.../cameraa
 | `gemini/GeminiConfig.kt` | API keys, model config, system prompt |
 | `gemini/GeminiLiveService.kt` | OkHttp WebSocket client for Gemini Live API |
 | `gemini/AudioManager.kt` | AudioRecord (16kHz) + AudioTrack (24kHz) |
-| `gemini/GeminiSessionViewModel.kt` | Session lifecycle, tool call wiring, UI state |
-| `openclaw/ToolCallModels.kt` | Tool declarations, data classes |
-| `openclaw/OpenClawBridge.kt` | OkHttp HTTP client for OpenClaw gateway |
-| `openclaw/ToolCallRouter.kt` | Routes Gemini tool calls to OpenClaw |
+| `gemini/GeminiSessionViewModel.kt` | Session lifecycle, UI state |
 | `phone/PhoneCameraManager.kt` | CameraX wrapper for phone camera mode |
 | `webrtc/WebRTCClient.kt` | WebRTC peer connection (stream-webrtc-android) |
 | `webrtc/SignalingClient.kt` | OkHttp WebSocket signaling for WebRTC rooms |
@@ -282,18 +195,6 @@ All source code is in `samples/CameraAccessAndroid/app/src/main/java/.../cameraa
 
 - **Glasses**: DAT SDK video stream (24fps) -> throttle to ~1fps -> JPEG (50% quality) -> Gemini
 - **Phone**: Camera capture (30fps) -> throttle to ~1fps -> JPEG -> Gemini
-
-### Tool Calling
-
-Gemini Live supports function calling. Both apps declare a single `execute` tool that routes everything through OpenClaw:
-
-1. User says "Add eggs to my shopping list"
-2. Gemini speaks "Sure, adding that now" (verbal acknowledgment before tool call)
-3. Gemini sends `toolCall` with `execute(task: "Add eggs to the shopping list")`
-4. `ToolCallRouter` sends HTTP POST to OpenClaw gateway
-5. OpenClaw executes the task using its 56+ connected skills
-6. Result returns to Gemini via `toolResponse`
-7. Gemini speaks the confirmation
 
 ### WebRTC Live Streaming
 
@@ -323,7 +224,6 @@ For full details, see [`samples/CameraAccess/CameraAccess/WebRTC/README.md`](sam
 - Xcode 15.0+
 - Gemini API key ([get one free](https://aistudio.google.com/apikey))
 - Meta Ray-Ban glasses (optional -- use iPhone mode for testing)
-- OpenClaw on your Mac (optional -- for agentic actions)
 
 ### Android
 - Android 14+ (API 34+)
@@ -331,7 +231,6 @@ For full details, see [`samples/CameraAccess/CameraAccess/WebRTC/README.md`](sam
 - GitHub account with `read:packages` token (for DAT SDK)
 - Gemini API key ([get one free](https://aistudio.google.com/apikey))
 - Meta Ray-Ban glasses (optional -- use Phone mode for testing)
-- OpenClaw on your Mac (optional -- for agentic actions)
 
 ---
 
@@ -340,10 +239,6 @@ For full details, see [`samples/CameraAccess/CameraAccess/WebRTC/README.md`](sam
 ### General
 
 **Gemini doesn't hear me** -- Check that microphone permission is granted. The app uses aggressive voice activity detection -- speak clearly and at normal volume.
-
-**OpenClaw connection timeout** -- Make sure your phone and Mac are on the same Wi-Fi network, the gateway is running (`openclaw gateway restart`), and the hostname matches your Mac's Bonjour name.
-
-**OpenClaw opens duplicate browser tabs** -- This is a known upstream issue in OpenClaw's CDP (Chrome DevTools Protocol) connection management ([#13851](https://github.com/nichochar/openclaw/issues/13851), [#12317](https://github.com/nichochar/openclaw/issues/12317)). Using `profile: "openclaw"` (managed Chrome) instead of the default extension relay may improve stability.
 
 ### iOS-specific
 
