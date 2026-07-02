@@ -11,10 +11,12 @@
 ## Global Constraints
 
 - **Branch:** `chore/remove-openclaw` (already created off `main`). All commits land here.
-- **Match by verbatim string, not line number.** Deletions shift subsequent line numbers within a file. Use the Edit tool with the exact `old_string` snippets below; the line numbers are orientation only.
+- **Match by verbatim string, not line number.** Deletions shift subsequent line numbers within a file. The line numbers below are orientation only.
+- **Source files are CRLF on disk; this plan's snippets are LF.** Do NOT paste an `old_string` verbatim from this plan into an Edit — a byte-exact Edit tool would fail to match every multi-line deletion. For each edit, **Read the target region first and build the `old_string` from the actual file bytes** (preserving CRLF and exact indentation). The plan's snippets are the identification guide. (Verified: all iOS/Android source and `project.pbxproj` are CRLF.)
 - **swiftui-pro:** Before editing ANY `.swift` file, invoke the `swiftui-pro` skill (project convention in `CLAUDE.md`). This does not apply to `.pbxproj`, `.kt`, or `Secrets*.example` files.
 - **WebRTC is PRESERVED on both platforms.** Never touch `WebRTC/` (iOS) / `webrtc/` (Android), `server/`, or any `webrtcSignalingURL` settings/secret. Each task's KEEP list calls out the WebRTC lines that sit next to removed code.
 - **Android executor trap:** In `gemini/GeminiLiveService.kt`, `sendExecutor.execute { }` is a `java.util.concurrent.Executor` (thread pool), NOT the OpenClaw `execute` tool. Never remove `sendExecutor` or its `.execute` calls except as a side effect of deleting the whole `sendToolResponse` function.
+- **Scope includes non-source cruft.** A "clean codebase" also means removing OpenClaw from CI (`.github/workflows/build.yml`) and docs (`README.md`, `CLAUDE.md`) — handled in Phase 3. None of these break the build, but they contradict the goal and are invisible to source-only greps.
 - **Verification is performed by the user** (Claude cannot run Xcode/Gradle here). iOS = full build + runtime. Android = compile-only (accepted gap).
 - **Types removed with the folder/package** (do not redeclare): iOS — `GeminiToolCall`, `GeminiToolCallCancellation`, `ToolCallStatus`, `ToolDeclarations`, `ToolCallRouter`, `OpenClawConnectionState`, `OpenClawBridge`. Android — same set. `GeminiConnectionState` (iOS) and `StreamingMode` (Android) are NOT tool types — keep them.
 
@@ -566,11 +568,13 @@ struct ToolCallStatusView: View {
 
 - [ ] **Step 5: StreamView — delete the `ToolCallStatusView` call site (~line 51)**
 
+The line is indented **12 spaces** (it sits inside `ZStack > if isGeminiActive > VStack > VStack(spacing: 8)`). Delete exactly this one line, at 12-space indent:
+
 ```swift
-        ToolCallStatusView(status: geminiVM.toolCallStatus)
+            ToolCallStatusView(status: geminiVM.toolCallStatus)
 ```
 
-If removing it leaves an empty container (e.g. a `VStack`/overlay that now has no children), check the immediately surrounding lines and remove the now-empty wrapper if the Swift compiler would otherwise warn. Otherwise leave the surrounding layout untouched.
+The enclosing `VStack(spacing: 8)` keeps its other children (the transcript `if`, the `isModelSpeaking` `if`, and the `isSendingScoutReport` scout-report `if`), so it is NOT left empty — delete only this line and change nothing else. (Verified: the file uses 12 spaces here, not 8.)
 
 - [ ] **Step 6: Commit**
 
@@ -621,8 +625,8 @@ Expected: build succeeds with **zero** errors. No "cannot find 'OpenClaw…' / '
 
 - [ ] **Step 2: Repo grep for stragglers (iOS)**
 
-Run: `grep -rn "OpenClaw\|toolCallRouter\|openClawBridge\|ToolCallStatusView\|isOpenClawConfigured\|onToolCall" "samples/CameraAccess/CameraAccess"`
-Expected: no matches.
+Run (case-insensitive superset of removed symbols): `grep -rniE "openclaw|tool[-_ ]?call|sendtoolresponse|tooldeclarations|ontoolcall" "samples/CameraAccess/CameraAccess"`
+Expected: no matches. This pattern catches lowercase `openClaw*`, `toolCallStatus`, `onToolCall`, `sendToolResponse`, `ToolDeclarations`, etc. — the earlier narrower/case-sensitive pattern reported false "clean."
 
 - [ ] **Step 3: Runtime smoke test (MockDeviceKit)**
 
@@ -1164,8 +1168,8 @@ Expected: `BUILD SUCCESSFUL`, no unresolved references.
 
 - [ ] **Step 2: Repo grep for stragglers (Android)**
 
-Run: `grep -rn "OpenClaw\|openClaw\|ToolCallRouter\|ToolDeclarations\|GeminiToolCall\|sendToolResponse\|ToolCallStatus" "samples/CameraAccessAndroid/app/src"`
-Expected: no matches. (Note: `sendExecutor.execute` must STILL be present in `GeminiLiveService.kt` — that is correct and expected.)
+Run (case-insensitive superset): `grep -rniE "openclaw|tool[-_ ]?call|sendtoolresponse|tooldeclarations|ontoolcall" "samples/CameraAccessAndroid/app/src"`
+Expected: no matches. This adds `onToolCall` and lowercase `toolCallStatus`/`toolCallRouter`, which the earlier pattern missed. Note: `sendExecutor.execute` must STILL be present in `GeminiLiveService.kt` — it does not match this pattern (no "toolcall" substring), which is correct and expected.
 
 - [ ] **Step 3: (Optional) UI check** if an emulator/device is available: Settings screen renders with no OpenClaw section, WebRTC section present. Runtime scout test is not applicable (Android has no SPECTRE scout). Per the spec, full Android runtime verification is deferred.
 
@@ -1173,25 +1177,123 @@ Expected: no matches. (Note: `sendExecutor.execute` must STILL be present in `Ge
 
 ---
 
-# PHASE 3 — Finish
+# PHASE 3 — Docs, CI cleanup & finish
 
-### Task 16: Cross-platform final verification + branch readiness
+> Non-source cleanup surfaced by the adversarial plan review. The CI workflow still injects OpenClaw secrets, and README/CLAUDE.md still document it. None break the build, but they contradict the "clean codebase" goal and are invisible to source-only greps. Platform-independent, low-risk.
+
+### Task 16: CI — remove OpenClaw from the TestFlight secrets injection
+
+**Files:**
+- Modify: `.github/workflows/build.yml`
+
+**Context:** The `Inject Secrets.swift` step writes the gitignored `Secrets.swift` used by the Release/TestFlight archive. It still declares four `openClaw*` constants. After the removal nothing references them (so it does not break the build), but it leaves the generated `Secrets.swift` inconsistent with the trimmed `Secrets.swift.example`.
+
+- [ ] **Step 1: Delete the four OpenClaw lines from the heredoc** (`.yml` file — no swiftui-pro). Read the region first (CRLF caveat), then remove:
+
+```
+            static let openClawHost = "http://localhost"
+            static let openClawPort = 18789
+            static let openClawHookToken = ""
+            static let openClawGatewayToken = ""
+```
+
+Keep `geminiAPIKey`, the three `spectre*` lines, and `static let webrtcSignalingURL = "ws://localhost:8080"`.
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add ".github/workflows/build.yml"
+git commit -m "ci: drop OpenClaw constants from Secrets injection"
+```
+
+---
+
+### Task 17: Docs — README.md
+
+**Files:**
+- Modify: `README.md`
+
+**Context:** README still documents OpenClaw as a live feature and lists now-deleted files.
+
+- [ ] **Step 1: Locate every reference**
+
+Run: `grep -niE "openclaw|tool[-_ ]?call|execute tool|gateway" README.md`
+
+- [ ] **Step 2: Remove OpenClaw content.** For the hits above:
+  - Delete the OpenClaw setup section (its config instructions and `openClaw*`/`openClawGatewayToken` snippets).
+  - In the architecture diagram, remove the OpenClaw / "Tool calls (execute) → OpenClaw Gateway" path so the documented flow is glasses → Gemini Live → SPECTRE.
+  - In the file-map table, delete the rows for the deleted files: `OpenClaw/ToolCallModels.swift`, `OpenClaw/OpenClawBridge.swift`, `OpenClaw/ToolCallRouter.swift`, `openclaw/OpenClawBridge.kt`, `openclaw/ToolCallRouter.kt`, and any `ToolCallModels.kt` row.
+  - Remove any remaining prose mentions of OpenClaw / agentic tool-calling.
+  - Leave ALL WebRTC and SPECTRE documentation intact.
+
+- [ ] **Step 3: Verify**
+
+Run: `grep -niE "openclaw" README.md`
+Expected: no matches.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add README.md
+git commit -m "docs: remove OpenClaw from README"
+```
+
+---
+
+### Task 18: Docs — project CLAUDE.md
+
+**Files:**
+- Modify: `CLAUDE.md` (repo root)
+
+- [ ] **Step 1: Remove the OpenClaw line from the Stack section**
+
+Delete:
+
+```
+- OpenClaw bridge for tool call routing
+```
+
+- [ ] **Step 2: Remove the OpenClaw line from the Architecture section**
+
+Delete:
+
+```
+- `OpenClaw/` — tool call bridge to Spectre
+```
+
+- [ ] **Step 3: Verify**
+
+Run: `grep -ni "openclaw" CLAUDE.md`
+Expected: no matches.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add CLAUDE.md
+git commit -m "docs: remove OpenClaw from project CLAUDE.md"
+```
+
+---
+
+### Task 19: Cross-platform final verification + branch readiness
 
 **Files:** none.
 
-- [ ] **Step 1: Repo-wide grep**
+- [ ] **Step 1: Repo-wide grep** (excludes only the design/plan docs, which legitimately still mention OpenClaw)
 
-Run: `grep -rni "openclaw" "samples" "docs" --include=*.swift --include=*.kt --include=*.pbxproj --include=*.example`
-Expected: no matches (the design/plan docs may still mention it; source must be clean).
+Run: `grep -rniE "openclaw|tool[-_ ]?call|sendtoolresponse|tooldeclarations|ontoolcall" . --exclude-dir=.git --exclude-dir=docs`
+Expected: no matches. (README.md and CLAUDE.md are at repo root and MUST be clean; the `docs/superpowers/` spec+plan are intentionally excluded.)
 
-- [ ] **Step 2: Confirm WebRTC intact** on both platforms (spot-check the WebRTC Settings section renders and `webrtcSignalingURL` secrets/config remain).
+- [ ] **Step 2: Confirm `sendExecutor` intact** (Android) — `grep -n "sendExecutor" samples/CameraAccessAndroid/app/src/main/java/com/meta/wearable/dat/externalsampleapps/cameraaccess/gemini/GeminiLiveService.kt` should still show the declaration + the two streaming-path `.execute` calls.
 
-- [ ] **Step 3: Review the full branch diff**
+- [ ] **Step 3: Confirm WebRTC intact** on both platforms (spot-check the WebRTC Settings section and that `webrtcSignalingURL` secret/config remain).
+
+- [ ] **Step 4: Review the full branch diff**
 
 Run: `git log --oneline main..chore/remove-openclaw` and `git diff --stat main..chore/remove-openclaw`
-Expected: only OpenClaw removals + the Android prompt rewrite; no WebRTC/SPECTRE/DAT files touched beyond the documented references.
+Expected: only OpenClaw removals + the Android prompt rewrite + CI/docs cleanup; no WebRTC/SPECTRE/DAT source touched beyond the documented references.
 
-- [ ] **Step 4: Hand back to the user** for the merge decision (per superpowers:finishing-a-development-branch): merge to `main`, open a PR, or continue.
+- [ ] **Step 5: Hand back to the user** for the merge decision (per superpowers:finishing-a-development-branch): merge to `main`, open a PR, or continue.
 
 ---
 
