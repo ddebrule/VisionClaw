@@ -3,9 +3,6 @@ package com.meta.wearable.dat.externalsampleapps.cameraaccess.gemini
 import android.graphics.Bitmap
 import android.util.Base64
 import android.util.Log
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.openclaw.GeminiToolCall
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.openclaw.GeminiToolCallCancellation
-import com.meta.wearable.dat.externalsampleapps.cameraaccess.openclaw.ToolDeclarations
 import java.io.ByteArrayOutputStream
 import java.util.Timer
 import java.util.TimerTask
@@ -48,8 +45,6 @@ class GeminiLiveService {
     var onDisconnected: ((String?) -> Unit)? = null
     var onInputTranscription: ((String) -> Unit)? = null
     var onOutputTranscription: ((String) -> Unit)? = null
-    var onToolCall: ((GeminiToolCall) -> Unit)? = null
-    var onToolCallCancellation: ((GeminiToolCallCancellation) -> Unit)? = null
 
     // Latency tracking
     private var lastUserSpeechEnd: Long = 0
@@ -136,8 +131,6 @@ class GeminiLiveService {
         timeoutTimer = null
         webSocket?.close(1000, null)
         webSocket = null
-        onToolCall = null
-        onToolCallCancellation = null
         _connectionState.value = GeminiConnectionState.Disconnected
         _isModelSpeaking.value = false
         resolveConnect(false)
@@ -177,12 +170,6 @@ class GeminiLiveService {
         }
     }
 
-    fun sendToolResponse(response: JSONObject) {
-        sendExecutor.execute {
-            webSocket?.send(response.toString())
-        }
-    }
-
     // Private
 
     private fun resolveConnect(success: Boolean) {
@@ -208,9 +195,6 @@ class GeminiLiveService {
                         put("text", GeminiConfig.systemInstruction)
                     }))
                 })
-                put("tools", JSONArray().put(JSONObject().apply {
-                    put("functionDeclarations", ToolDeclarations.allDeclarationsJSON())
-                }))
                 put("realtimeInputConfig", JSONObject().apply {
                     put("automaticActivityDetection", JSONObject().apply {
                         put("disabled", false)
@@ -248,22 +232,6 @@ class GeminiLiveService {
                 _connectionState.value = GeminiConnectionState.Disconnected
                 _isModelSpeaking.value = false
                 onDisconnected?.invoke("Server closing (time left: ${seconds}s)")
-                return
-            }
-
-            // Tool call
-            val toolCall = GeminiToolCall.fromJSON(json)
-            if (toolCall != null) {
-                Log.d(TAG, "Tool call received: ${toolCall.functionCalls.size} function(s)")
-                onToolCall?.invoke(toolCall)
-                return
-            }
-
-            // Tool call cancellation
-            val cancellation = GeminiToolCallCancellation.fromJSON(json)
-            if (cancellation != null) {
-                Log.d(TAG, "Tool call cancellation: ${cancellation.ids.joinToString()}")
-                onToolCallCancellation?.invoke(cancellation)
                 return
             }
 

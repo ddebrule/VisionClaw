@@ -21,18 +21,6 @@ object GeminiConfig {
     val apiKey: String
         get() = SettingsManager.geminiAPIKey
 
-    val openClawHost: String
-        get() = SettingsManager.openClawHost
-
-    val openClawPort: Int
-        get() = SettingsManager.openClawPort
-
-    val openClawHookToken: String
-        get() = SettingsManager.openClawHookToken
-
-    val openClawGatewayToken: String
-        get() = SettingsManager.openClawGatewayToken
-
     fun websocketURL(): String? {
         if (apiKey == "YOUR_GEMINI_API_KEY" || apiKey.isEmpty()) return null
         return "$WEBSOCKET_BASE_URL?key=$apiKey"
@@ -40,9 +28,4 @@ object GeminiConfig {
 
     val isConfigured: Boolean
         get() = apiKey != "YOUR_GEMINI_API_KEY" && apiKey.isNotEmpty()
-
-    val isOpenClawConfigured: Boolean
-        get() = openClawGatewayToken != "YOUR_OPENCLAW_GATEWAY_TOKEN"
-                && openClawGatewayToken.isNotEmpty()
-                && openClawHost != "http://YOUR_MAC_HOSTNAME.local"
 }
