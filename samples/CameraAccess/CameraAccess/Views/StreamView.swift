@@ -48,7 +48,6 @@ struct StreamView: View {
             if !geminiVM.userTranscript.isEmpty || !geminiVM.aiTranscript.isEmpty {
               TranscriptView(userText: geminiVM.userTranscript, aiText: geminiVM.aiTranscript)
             }
-            ToolCallStatusView(status: geminiVM.toolCallStatus)
             if geminiVM.isModelSpeaking {
               HStack(spacing: 8) {
                 Image(systemName: "speaker.wave.2.fill")
