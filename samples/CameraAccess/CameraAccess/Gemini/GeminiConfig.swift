@@ -1,8 +1,10 @@
 import Foundation
 
 enum GeminiConfig {
-  // Original audio-native model — uses v1alpha endpoint
-  static let websocketBaseURL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
+  // gemini-3.1-flash-live-preview is a Live model served on the v1beta BidiGenerateContent
+  // endpoint. (The earlier native-audio model used v1alpha; swapping the model without moving
+  // the endpoint made the server accept the socket and then close it — "Failed to connect".)
+  static let websocketBaseURL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
   static let model = "models/gemini-3.1-flash-live-preview"
 
   static let inputAudioSampleRate: Double = 16000
