@@ -146,6 +146,7 @@
 		9D3C69602F367CF700E641A5 /* iPhone */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = iPhone; sourceTree = "<group>"; };
 		E699CC962E8150670052C240 /* CameraAccessTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = CameraAccessTests; sourceTree = "<group>"; };
 		5C0E00012F9A000000000001 /* ScoutCore */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); name = ScoutCore; path = ScoutCore/Sources/ScoutCore; sourceTree = "<group>"; };
+		5C0E00012F9A000000000002 /* TrackWalk */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = TrackWalk; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -229,6 +230,7 @@
 				9DD6CAAD2F3C426600ED7098 /* Secrets.swift */,
 				9DD6CAAE2F3C426600ED7098 /* Secrets.swift.example */,
 				9D3C69602F367CF700E641A5 /* iPhone */,
+				5C0E00012F9A000000000002 /* TrackWalk */,
 				A1B2C3D42F0A000300000001 /* Gemini */,
 				8FD96B702E6F0A9800F56AB1 /* ViewModels */,
 				8FD96B762E6F0A9800F56AB1 /* Views */,
@@ -333,6 +335,7 @@
 			fileSystemSynchronizedGroups = (
 				9D3C69602F367CF700E641A5 /* iPhone */,
 				5C0E00012F9A000000000001 /* ScoutCore */,
+				5C0E00012F9A000000000002 /* TrackWalk */,
 			);
 			name = CameraAccess;
 			productName = CameraAccess;
