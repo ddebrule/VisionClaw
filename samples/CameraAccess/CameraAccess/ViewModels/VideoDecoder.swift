@@ -15,9 +15,7 @@ enum DecoderError: Error {
   case decodingFailed(OSStatus)
 }
 
-/// Decodes compressed video frames (H.264/HEVC) into raw pixel buffers
-/// using VTDecompressionSession. Used for background frame processing
-/// where VideoToolbox GPU rendering is unavailable but decompression still works.
+/// Decodes compressed video frames (H.264/HEVC) into BGRA pixel buffers with VTDecompressionSession. Not thread-safe: call it from one serial queue.
 final class VideoDecoder {
 
   struct DecodedFrame {
@@ -29,6 +27,7 @@ final class VideoDecoder {
   private var decompressionSession: VTDecompressionSession?
   private var currentFormatDescription: CMFormatDescription?
   private var onFrameDecoded: ((DecodedFrame) -> Void)?
+  private(set) var failureCount = 0
 
   init() {}
 
@@ -53,10 +52,28 @@ final class VideoDecoder {
       try createDecompressionSession(formatDescription: formatDescription)
     }
 
+    var result = try decodeOnce(sampleBuffer)
+
+    // Backgrounding invalidates the session (kVTInvalidSessionErr, -12903).
+    // Previously decode() just threw, so the session stayed dead for the rest
+    // of the call: locking the phone killed the decoder and unlocking never
+    // brought it back. Rebuild and retry the frame instead.
+    if result == kVTInvalidSessionErr || result == kVTVideoDecoderMalfunctionErr {
+      NSLog("[VideoDecoder] session invalid (%d), rebuilding", result)
+      try recreateDecompressionSession(formatDescription: formatDescription)
+      result = try decodeOnce(sampleBuffer)
+    }
+
+    guard result == noErr else {
+      failureCount += 1
+      throw DecoderError.decodingFailed(result)
+    }
+  }
+
+  private func decodeOnce(_ sampleBuffer: CMSampleBuffer) throws -> OSStatus {
     guard let session = decompressionSession else {
       throw DecoderError.invalidFormat
     }
-
     var flagOut = VTDecodeInfoFlags(rawValue: 0)
     let result = VTDecompressionSessionDecodeFrame(
       session,
@@ -65,12 +82,10 @@ final class VideoDecoder {
       frameRefcon: nil,
       infoFlagsOut: &flagOut
     )
-
-    guard result == noErr else {
-      throw DecoderError.decodingFailed(result)
+    if result == noErr {
+      VTDecompressionSessionWaitForAsynchronousFrames(session)
     }
-
-    VTDecompressionSessionWaitForAsynchronousFrames(session)
+    return result
   }
 
   func invalidateSession() {
@@ -108,15 +123,37 @@ final class VideoDecoder {
     }
     outputCallback.decompressionOutputRefCon = Unmanaged.passUnretained(self).toOpaque()
 
+    // Hardware decode runs in a shared out-of-process service, which iOS tears
+    // down when the app backgrounds -- that is the -12903 storm on a locked
+    // screen. Software decode stays inside this process and keeps working with
+    // the screen off. Fall back to the default decoder if software is
+    // unavailable for this format, so a foreground stream never breaks over it.
+    let softwareSpec: [CFString: Any] = [
+      kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder: false,
+    ]
+
     var session: VTDecompressionSession?
-    let status = VTDecompressionSessionCreate(
+    var usedSoftware = true
+    var status = VTDecompressionSessionCreate(
       allocator: kCFAllocatorDefault,
       formatDescription: formatDescription,
-      decoderSpecification: nil,
+      decoderSpecification: softwareSpec as CFDictionary,
       imageBufferAttributes: attrs as CFDictionary,
       outputCallback: &outputCallback,
       decompressionSessionOut: &session
     )
+
+    if status != noErr || session == nil {
+      usedSoftware = false
+      status = VTDecompressionSessionCreate(
+        allocator: kCFAllocatorDefault,
+        formatDescription: formatDescription,
+        decoderSpecification: nil,
+        imageBufferAttributes: attrs as CFDictionary,
+        outputCallback: &outputCallback,
+        decompressionSessionOut: &session
+      )
+    }
 
     guard let session, status == noErr else {
       throw DecoderError.configurationError(status)
@@ -131,6 +168,7 @@ final class VideoDecoder {
                             (subType >> 16) & 0xFF,
                             (subType >> 8) & 0xFF,
                             subType & 0xFF)
-    NSLog("[VideoDecoder] Created decompression session for codec: %@", subTypeStr)
+    NSLog("[VideoDecoder] Created %@ decompression session for codec: %@",
+          usedSoftware ? "software" : "hardware", subTypeStr)
   }
 }
