@@ -953,4 +953,9 @@ Expected: green.
 - [ ] **(4)** Make the last send fail (Airplane Mode at End), then tap Scout. You see "Send or discard the last Scout report first (tap End)." End → Discard clears it, and Scout then starts.
 - [ ] **(5)** In iPhone mode, ask a long question and let the reply finish. Talk again: Scout hears you. Then interrupt a reply by toggling Airplane Mode for ~5 s: after reconnect, Scout hears you. Finally, Scout off → End → Discard → Scout on: the mic works and Scout starts.
 
+**Results, 2026-09-23 (owner, run in Scout test mode, commit 6d56f51):**
+- Passed: basic checks, check (2) dead zones, check (4), check (5) mic.
+- Pending: check (1), the 12+ minute session across `goAway`. Not yet run; do it on the next longer session.
+- Pending: the real SPECTRE send (test mode doesn't send). Confirm on the first session that is actually active.
+
 - [ ] **Step 3:** If every box is ticked, Stage 1 is done. Next is writing Plan 2 (Stage 2), whose first task is the Vanguard gate.
