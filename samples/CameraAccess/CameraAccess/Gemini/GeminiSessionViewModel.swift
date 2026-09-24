@@ -96,7 +96,9 @@ class GeminiSessionViewModel: ObservableObject {
       guard let self else { return }
       Task { @MainActor in
         let speakerOnPhone = self.streamingMode == .iPhone || SettingsManager.shared.speakerOutputEnabled
-        if speakerOnPhone && self.geminiService.isModelSpeaking { return }
+        // isModelSpeaking covers the gap before the first buffer is scheduled;
+        // isSpeakerActive covers the tail that plays after generation ends.
+        if speakerOnPhone && (self.geminiService.isModelSpeaking || self.audioManager.isSpeakerActive) { return }
         self.geminiService.sendAudio(data: data)
       }
     }

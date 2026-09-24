@@ -11,6 +11,19 @@ class AudioManager {
   private var wasCapturingBeforeInterruption = false
   private var useIPhoneMode = false
 
+  // Buffers scheduled on playerNode that have not finished (or been stopped).
+  private let playbackCountLock = NSLock()
+  private var scheduledPlaybackBuffers = 0
+
+  /// True while audio is still coming out of the speaker, including the buffered
+  /// tail that keeps playing after Gemini reports the turn complete. The iPhone-mode
+  /// mute follows this so the model never hears the end of its own reply.
+  var isSpeakerActive: Bool {
+    playbackCountLock.lock()
+    defer { playbackCountLock.unlock() }
+    return scheduledPlaybackBuffers > 0
+  }
+
   private let outputFormat: AVAudioFormat
 
   // Accumulate resampled PCM into ~100ms chunks before sending
@@ -173,7 +186,17 @@ class AudioManager {
       }
     }
 
-    playerNode.scheduleBuffer(buffer)
+    playbackCountLock.lock()
+    scheduledPlaybackBuffers += 1
+    playbackCountLock.unlock()
+    // The completion handler also fires when playerNode.stop() flushes the buffer
+    // (interruption, stopPlayback), so the count always returns to zero.
+    playerNode.scheduleBuffer(buffer) { [weak self] in
+      guard let self else { return }
+      self.playbackCountLock.lock()
+      self.scheduledPlaybackBuffers = max(0, self.scheduledPlaybackBuffers - 1)
+      self.playbackCountLock.unlock()
+    }
     if !playerNode.isPlaying {
       playerNode.play()
     }
