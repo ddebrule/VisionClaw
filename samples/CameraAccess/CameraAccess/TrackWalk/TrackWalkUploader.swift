@@ -84,10 +84,8 @@ final class TrackWalkUploader: ObservableObject {
   /// and starts again on the cellular session. Async so a lock-screen notification
   /// action can hold the app awake until the choice has actually been acted on.
   func choose(_ network: UploadNetwork, for id: UUID) async {
-    let background = UIApplication.shared.beginBackgroundTask(withName: "ScoutUploadChoice")
-    defer {
-      if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
-    }
+    let background = BackgroundTime("ScoutUploadChoice")
+    defer { background.end() }
     ScoutOutbox.shared.update(id) { $0.uploadNetwork = network }
     UploadPrompt.shared.withdraw(for: id)
     await taskScan?.value
@@ -171,10 +169,8 @@ final class TrackWalkUploader: ObservableObject {
     }
     working.insert(id)
     defer { working.remove(id) }
-    let background = UIApplication.shared.beginBackgroundTask(withName: "ScoutUpload")
-    defer {
-      if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
-    }
+    let background = BackgroundTime("ScoutUpload")
+    defer { background.end() }
 
     let step: UploadStep
     if let mediaId = capture.mediaId {
@@ -187,12 +183,18 @@ final class TrackWalkUploader: ObservableObject {
 
     // The wait above can be several seconds; re-read the capture and its route so a
     // choice (or a delete) made while it was in flight still takes effect.
-    guard let freshCapture = ScoutOutbox.shared.capture(id) else { return }
+    guard let freshCapture = ScoutOutbox.shared.capture(id),
+          OutboxRules.needsUpload(freshCapture, trackWalkReportsEnabled: SettingsManager.shared.trackWalkReportsEnabled)
+    else { return }
     let freshSession: URLSession
     switch UploadRules.route(for: freshCapture, onWiFi: onWiFi, cellularAvailable: cellularAvailable) {
     case .cellularSession:
       freshSession = cellularSession
-    case .wait, .askUser, .wifiSession:
+    case .askUser:
+      // Wi-Fi dropped during the wait: ask now (once per run) and hold on the Wi-Fi session.
+      UploadPrompt.shared.ask(for: freshCapture, sizeBytes: Self.size(of: file))
+      freshSession = wifiSession
+    case .wait, .wifiSession:
       // `.wait` too: a token was already issued, so hold it on the Wi-Fi-only session
       // rather than dropping it and waiting again.
       freshSession = wifiSession
@@ -220,10 +222,8 @@ final class TrackWalkUploader: ObservableObject {
   }
 
   private func complete(_ id: UUID, mediaId: String) async {
-    let background = UIApplication.shared.beginBackgroundTask(withName: "ScoutUploadComplete")
-    defer {
-      if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
-    }
+    let background = BackgroundTime("ScoutUploadComplete")
+    defer { background.end() }
     finish(id, await client.complete(mediaId: mediaId))
   }
 
@@ -252,14 +252,21 @@ final class TrackWalkUploader: ObservableObject {
     }
   }
 
+  /// Cancels this walk's tasks in `sessions`. The live-task record is cleared only
+  /// if it was one of them, so a task another step started meanwhile is kept.
   private func cancelTasks(for id: UUID, in sessions: [URLSession]) async {
+    var cancelled: Set<String> = []
     for session in sessions {
       for task in await session.allTasks where task.taskDescription == id.uuidString {
-        abandoned.insert(UploadSessionDelegate.key(session, task))
+        let key = UploadSessionDelegate.key(session, task)
+        abandoned.insert(key)
+        cancelled.insert(key)
         task.cancel()
       }
     }
-    liveTasks[id] = nil
+    if let live = liveTasks[id], cancelled.contains(live) {
+      liveTasks[id] = nil
+    }
   }
 
   private func scheduleRetry() {
@@ -290,6 +297,25 @@ final class TrackWalkUploader: ObservableObject {
           duration.isNumeric, duration.seconds > 0
     else { return nil }
     return duration.seconds
+  }
+}
+
+/// Background time for one step. Ends itself if iOS's allowance runs out first,
+/// so an overrun never gets the app terminated.
+@MainActor
+private final class BackgroundTime {
+  private var id: UIBackgroundTaskIdentifier = .invalid
+
+  init(_ name: String) {
+    id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+      MainActor.assumeIsolated { self?.end() }
+    }
+  }
+
+  func end() {
+    guard id != .invalid else { return }
+    UIApplication.shared.endBackgroundTask(id)
+    id = .invalid
   }
 }
 

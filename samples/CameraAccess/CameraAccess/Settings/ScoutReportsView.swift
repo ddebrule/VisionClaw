@@ -48,7 +48,7 @@ struct ScoutReportsView: View {
 private struct ReportRow: View {
   let capture: Capture
   let outbox: ScoutOutbox
-  let uploader: TrackWalkUploader
+  @ObservedObject var uploader: TrackWalkUploader
   @Binding var pendingDelete: Capture?
   @Binding var confirmingDelete: Bool
 
@@ -65,7 +65,7 @@ private struct ReportRow: View {
       Text("\(capture.mode == .trackWalk ? "Track Walk" : capture.vehicleModel) · \(capture.durationMin) min · \(capture.createdAt.formatted(date: .abbreviated, time: .shortened))")
         .font(.caption)
         .foregroundStyle(.secondary)
-      if capture.state == .uploading, let fraction = uploader.progress[capture.id] {
+      if capture.state == .uploading, canMove(capture), let fraction = uploader.progress[capture.id] {
         ProgressView(value: fraction)
           .accessibilityLabel("Upload progress")
       }
@@ -123,10 +123,12 @@ private struct ReportRow: View {
       guard capture.mode == .trackWalk else { return "Sent" }
       return canMove(capture) ? "Report sent · starting upload" : "Report sent · waiting for Wi-Fi"
     case .uploading:
+      // A task queued on the Wi-Fi-only session reports 0% until Wi-Fi appears.
+      guard canMove(capture) else { return "Waiting for Wi-Fi" }
       if let fraction = uploader.progress[capture.id] {
         return "Uploading \(Int(fraction * 100))%"
       }
-      return canMove(capture) ? "Uploading…" : "Waiting for Wi-Fi"
+      return "Uploading…"
     case .done: return "Sent"
     case .failed:
       if capture.reportAccepted == true {
