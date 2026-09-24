@@ -232,6 +232,7 @@ class StreamSessionViewModel: ObservableObject {
       sessionHasStarted = true
       streamingStatus = .waiting
     case .stopping, .paused:
+      sessionHasStarted = true
       streamingStatus = .waiting
     case .idle, .stopped:
       guard sessionHasStarted else { return }
@@ -376,6 +377,7 @@ class StreamSessionViewModel: ObservableObject {
       streamHasStarted = true
       streamingStatus = .waiting
     case .waitingForDevice, .stopping, .paused:
+      streamHasStarted = true
       streamingStatus = .waiting
     case .stopped:
       currentVideoFrame = nil
