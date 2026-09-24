@@ -271,7 +271,7 @@ class GeminiSessionViewModel: ObservableObject {
   @discardableResult
   func endScout() async -> EndScoutResult {
     flushPendingTurn()
-    guard !spectreSessionId.isEmpty, !scoutHistory.isEmpty else {
+    guard !scoutReportSent, !spectreSessionId.isEmpty, !scoutHistory.isEmpty else {
       stopSession()
       return .nothingToSend
     }
