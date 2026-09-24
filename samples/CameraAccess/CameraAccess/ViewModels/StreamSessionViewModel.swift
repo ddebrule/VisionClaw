@@ -106,16 +106,16 @@ class StreamSessionViewModel: ObservableObject {
   private var deviceMonitorTask: Task<Void, Never>?
   private var iPhoneCameraManager: IPhoneCameraManager?
 
-  // CPU-based CIContext for rendering decoded pixel buffers in background
-  private let cpuCIContext = CIContext(options: [.useSoftwareRenderer: true])
-  // VideoDecoder for decompressing HEVC/H.264 frames in background
+  // Every source publishes each frame here once; the preview, Gemini and
+  // WebRTC consumers subscribe and apply their own rates.
+  private let frameHub = FrameHub()
+  private let imageRenderer = PixelBufferImageRenderer()
+  private var previewThrottle = FrameThrottle(minimumInterval: 1.0 / 8)
+  private var geminiThrottle = FrameThrottle(minimumInterval: GeminiConfig.videoFrameInterval)
+  // Compressed glasses samples (HEVC, or raw once backgrounded) are decoded
+  // here, off the main thread. VideoDecoder is used only on this queue.
   private let videoDecoder = VideoDecoder()
-  private var backgroundFrameCount = 0
-  private var bgDiagLogged = false
-  // Foreground frames converted to UIImage: every 3rd (8 fps of 24) unless WebRTC
-  // is live and needs them all. makeUIImage is a GPU->CPU render on the main
-  // thread; doing it 24x/s froze the app. Replaced by FrameHub in Stage 3.
-  private var foregroundFrameCount = 0
+  private let decodeQueue = DispatchQueue(label: "glasses-decode", qos: .userInitiated)
   // Delivered-frame-rate reporting for the event log.
   private var loggedFirstFrame = false
   private var deliveredFrames = 0
@@ -136,24 +136,77 @@ class StreamSessionViewModel: ObservableObject {
     }
 
     setupVideoDecoder()
+    subscribeFrameConsumers()
   }
 
   private func setupVideoDecoder() {
+    // Runs on the decode queue; hop to the main actor to publish.
     videoDecoder.setFrameCallback { [weak self] decodedFrame in
+      let frame = VideoFrameSample(
+        pixelBuffer: decodedFrame.pixelBuffer,
+        timestamp: decodedFrame.presentationTimeStamp)
       Task { @MainActor [weak self] in
-        guard let self else { return }
-        let pixelBuffer = decodedFrame.pixelBuffer
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let rect = CGRect(x: 0, y: 0, width: width, height: height)
-        if let cgImage = self.cpuCIContext.createCGImage(ciImage, from: rect) {
-          let image = UIImage(cgImage: cgImage)
-          self.geminiSessionVM?.sendVideoFrameIfThrottled(image: image)
-          self.webrtcSessionVM?.pushVideoFrame(image)
-          if self.backgroundFrameCount <= 5 || self.backgroundFrameCount % 120 == 0 {
-            NSLog("[Stream] Background frame #%d decoded and forwarded (%dx%d)",
-                  self.backgroundFrameCount, width, height)
+        self?.frameHub.publish(frame)
+      }
+    }
+  }
+
+  private func subscribeFrameConsumers() {
+    frameHub.subscribe { [weak self] frame in self?.showPreview(frame) }
+    frameHub.subscribe { [weak self] frame in self?.sendToGemini(frame) }
+    frameHub.subscribe { [weak self] frame in
+      self?.webrtcSessionVM?.pushVideoFrame(frame.pixelBuffer)
+    }
+  }
+
+  /// At most 8 preview images a second, and none while backgrounded.
+  private func showPreview(_ frame: VideoFrameSample) {
+    guard UIApplication.shared.applicationState != .background,
+          previewThrottle.shouldPass(at: ProcessInfo.processInfo.systemUptime)
+    else { return }
+    imageRenderer.render(frame.pixelBuffer) { [weak self] image in
+      // A render that finishes after streaming stopped must not bring a frame back.
+      guard let self, self.streamingStatus != .stopped else { return }
+      self.currentVideoFrame = image
+      if !self.hasReceivedFirstFrame {
+        self.hasReceivedFirstFrame = true
+      }
+    }
+  }
+
+  /// One frame a second to Gemini while Scout runs, locked screen included.
+  private func sendToGemini(_ frame: VideoFrameSample) {
+    guard let gemini = geminiSessionVM, gemini.isGeminiActive,
+          geminiThrottle.shouldPass(at: ProcessInfo.processInfo.systemUptime)
+    else { return }
+    imageRenderer.render(frame.pixelBuffer) { [weak gemini] image in
+      gemini?.sendVideoFrame(image: image)
+    }
+  }
+
+  /// Raw samples carry a pixel buffer and publish directly. Compressed ones
+  /// (HEVC, or raw once the app is backgrounded) go to the decoder, whose
+  /// callback publishes.
+  private func ingestGlassesSample(_ sampleBuffer: CMSampleBuffer) {
+    if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+      frameHub.publish(VideoFrameSample(
+        pixelBuffer: pixelBuffer,
+        timestamp: CMSampleBufferGetPresentationTimeStamp(sampleBuffer)))
+      return
+    }
+    let decoder = videoDecoder
+    decodeQueue.async { [weak self] in
+      do {
+        try decoder.decode(sampleBuffer)
+      } catch {
+        let failures = decoder.failureCount
+        if failures <= 3 || failures % 120 == 0 {
+          NSLog("[Stream] decode failed (#%d): %@", failures, String(describing: error))
+        }
+        if failures == 1 {
+          let text = "decode failed: \(String(describing: error))"
+          Task { @MainActor [weak self] in
+            self?.logEvent(text)
           }
         }
       }
@@ -197,6 +250,8 @@ class StreamSessionViewModel: ObservableObject {
 
   func startSession() async {
     _ = link.handle(.userStarted)
+    previewThrottle.reset()
+    geminiThrottle.reset()
     connectGlasses()
   }
 
@@ -306,57 +361,11 @@ class StreamSessionViewModel: ObservableObject {
     // Fires in the foreground and the background, so streaming continues
     // with the screen locked.
     videoFrameListenerToken = stream.videoFramePublisher.listen { [weak self] videoFrame in
+      let sampleBuffer = videoFrame.sampleBuffer
       Task { @MainActor [weak self] in
         guard let self, generation == self.cameraGeneration else { return }
-        self.noteDeliveredFrame(videoFrame.sampleBuffer)
-
-        let isInBackground = UIApplication.shared.applicationState == .background
-
-        if !isInBackground {
-          self.backgroundFrameCount = 0
-          self.bgDiagLogged = false
-          self.foregroundFrameCount &+= 1
-          let webrtcNeedsEveryFrame = self.webrtcSessionVM?.isActive == true
-          guard webrtcNeedsEveryFrame || (self.foregroundFrameCount - 1) % 3 == 0 else { return }
-          if let image = videoFrame.makeUIImage() {
-            self.currentVideoFrame = image
-            if !self.hasReceivedFirstFrame {
-              self.hasReceivedFirstFrame = true
-            }
-            self.geminiSessionVM?.sendVideoFrameIfThrottled(image: image)
-            self.webrtcSessionVM?.pushVideoFrame(image)
-          }
-        } else {
-          // In background: makeUIImage() uses VideoToolbox GPU rendering which iOS suspends.
-          // Instead, use our VideoDecoder (VTDecompressionSession) to decode compressed
-          // frames into pixel buffers, then convert via CPU CIContext.
-          self.backgroundFrameCount += 1
-
-          let sampleBuffer = videoFrame.sampleBuffer
-          let hasCompressedData = CMSampleBufferGetDataBuffer(sampleBuffer) != nil
-
-          if hasCompressedData {
-            do {
-              try self.videoDecoder.decode(sampleBuffer)
-            } catch {
-              if self.backgroundFrameCount <= 5 || self.backgroundFrameCount % 120 == 0 {
-                NSLog("[Stream] Background frame #%d decode error: %@",
-                      self.backgroundFrameCount, String(describing: error))
-              }
-            }
-          } else if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
-            let width = CVPixelBufferGetWidth(pixelBuffer)
-            let height = CVPixelBufferGetHeight(pixelBuffer)
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-            let rect = CGRect(x: 0, y: 0, width: width, height: height)
-            if let cgImage = self.cpuCIContext.createCGImage(ciImage, from: rect) {
-              let image = UIImage(cgImage: cgImage)
-              self.geminiSessionVM?.sendVideoFrameIfThrottled(image: image)
-              self.webrtcSessionVM?.pushVideoFrame(image)
-            }
-            self.videoDecoder.invalidateSession()
-          }
-        }
+        self.noteDeliveredFrame(sampleBuffer)
+        self.ingestGlassesSample(sampleBuffer)
       }
     }
 
@@ -550,17 +559,14 @@ class StreamSessionViewModel: ObservableObject {
   }
 
   private func startIPhoneSession() {
+    previewThrottle.reset()
+    geminiThrottle.reset()
     streamingMode = .iPhone
     let camera = IPhoneCameraManager()
-    camera.onFrameCaptured = { [weak self] image in
+    camera.onPixelBuffer = { [weak self] pixelBuffer, timestamp in
+      let frame = VideoFrameSample(pixelBuffer: pixelBuffer, timestamp: timestamp)
       Task { @MainActor [weak self] in
-        guard let self else { return }
-        self.currentVideoFrame = image
-        if !self.hasReceivedFirstFrame {
-          self.hasReceivedFirstFrame = true
-        }
-        self.geminiSessionVM?.sendVideoFrameIfThrottled(image: image)
-        self.webrtcSessionVM?.pushVideoFrame(image)
+        self?.frameHub.publish(frame)
       }
     }
     camera.start()

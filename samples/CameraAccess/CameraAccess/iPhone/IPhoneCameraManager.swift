@@ -5,10 +5,10 @@ class IPhoneCameraManager: NSObject {
   private let captureSession = AVCaptureSession()
   private let videoOutput = AVCaptureVideoDataOutput()
   private let sessionQueue = DispatchQueue(label: "iphone-camera-session")
-  private let context = CIContext()
   private var isRunning = false
 
-  var onFrameCaptured: ((UIImage) -> Void)?
+  /// Called on the capture queue for every frame; the FrameHub throttles per consumer.
+  var onPixelBuffer: ((CVPixelBuffer, CMTime) -> Void)?
 
   func start() {
     guard !isRunning else { return }
@@ -87,11 +87,6 @@ extension IPhoneCameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     from connection: AVCaptureConnection
   ) {
     guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-
-    let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-    guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
-    let image = UIImage(cgImage: cgImage)
-
-    onFrameCaptured?(image)
+    onPixelBuffer?(pixelBuffer, CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
   }
 }

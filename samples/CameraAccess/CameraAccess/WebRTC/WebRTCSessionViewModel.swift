@@ -1,3 +1,4 @@
+import CoreVideo
 import Foundation
 import SwiftUI
 import WebRTC
@@ -72,9 +73,9 @@ class WebRTCSessionViewModel: ObservableObject {
   }
 
   /// Called by StreamSessionViewModel on each video frame.
-  func pushVideoFrame(_ image: UIImage) {
+  func pushVideoFrame(_ pixelBuffer: CVPixelBuffer) {
     guard isActive, connectionState == .connected else { return }
-    webRTCClient?.pushVideoFrame(image)
+    webRTCClient?.pushVideoFrame(pixelBuffer)
   }
 
   // MARK: - WebRTC + Signaling Setup

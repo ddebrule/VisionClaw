@@ -28,7 +28,6 @@ class GeminiSessionViewModel: ObservableObject {
 
   private let geminiService = GeminiLiveService()
   private let audioManager = AudioManager()
-  private var lastVideoFrameTime: Date = .distantPast
   private var stateObservation: Task<Void, Never>?
 
   // Scout_IQ transcript accumulation
@@ -287,12 +286,11 @@ class GeminiSessionViewModel: ObservableObject {
     isSendingScoutReport = false
   }
 
-  func sendVideoFrameIfThrottled(image: UIImage) {
+  /// Sends one frame to Gemini. The caller (StreamSessionViewModel's FrameHub
+  /// consumer) already limits this to GeminiConfig.videoFrameInterval.
+  func sendVideoFrame(image: UIImage) {
     guard SettingsManager.shared.videoStreamingEnabled else { return }
     guard isGeminiActive, connectionState == .ready else { return }
-    let now = Date()
-    guard now.timeIntervalSince(lastVideoFrameTime) >= GeminiConfig.videoFrameInterval else { return }
-    lastVideoFrameTime = now
     geminiService.sendVideoFrame(image: image)
   }
 
