@@ -57,28 +57,35 @@ class GeminiLiveService: ObservableObject {
     connectionState = .connecting
     let result = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
       self.connectContinuation = continuation
-      self.delegate.onOpen = { [weak self] protocol_ in
+      self.delegate.onOpen = { [weak self] task in
         guard let self else { return }
         Task { @MainActor in
+          // A disconnect()+connect() pair can leave the old task's delegate callback
+          // in flight after the new task is already installed. Only the task that is
+          // still `self.webSocketTask` is the live attempt; a stale task's callback
+          // is silently dropped instead of resolving/failing the new attempt.
+          guard task === self.webSocketTask else { return }
           self.connectionState = .settingUp
           self.sendSetupMessage()
           self.startReceiving()
         }
       }
-      self.delegate.onClose = { [weak self] code, reason in
+      self.delegate.onClose = { [weak self] task, code, reason in
         guard let self else { return }
         let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "no reason"
         Task { @MainActor in
+          guard task === self.webSocketTask else { return }
           self.resolveConnect(success: false)
           self.connectionState = .disconnected
           self.isModelSpeaking = false
           self.onDisconnected?("Connection closed (code \(code.rawValue): \(reasonStr))")
         }
       }
-      self.delegate.onError = { [weak self] error in
+      self.delegate.onError = { [weak self] task, error in
         guard let self else { return }
         let msg = error?.localizedDescription ?? "Unknown error"
         Task { @MainActor in
+          guard task === self.webSocketTask else { return }
           self.resolveConnect(success: false)
           self.connectionState = .error(msg)
           self.isModelSpeaking = false
@@ -197,12 +204,15 @@ class GeminiLiveService: ObservableObject {
   }
 
   private func startReceiving() {
+    // Bind this loop to the task that was current when it started, not whatever
+    // self.webSocketTask happens to be later — the same stale-task problem the
+    // delegate callbacks guard against also applies to this loop's catch path.
+    let ownTask = webSocketTask
     receiveTask = Task { [weak self] in
-      guard let self else { return }
+      guard let self, let ownTask else { return }
       while !Task.isCancelled {
-        guard let task = self.webSocketTask else { break }
         do {
-          let message = try await task.receive()
+          let message = try await ownTask.receive()
           switch message {
           case .string(let text): await self.handleMessage(text)
           case .data(let data):
@@ -213,6 +223,7 @@ class GeminiLiveService: ObservableObject {
           if !Task.isCancelled {
             let reason = error.localizedDescription
             await MainActor.run {
+              guard ownTask === self.webSocketTask else { return }
               self.resolveConnect(success: false)
               self.connectionState = .disconnected
               self.isModelSpeaking = false
@@ -301,19 +312,22 @@ class GeminiLiveService: ObservableObject {
 // MARK: - WebSocket Delegate
 
 private class WebSocketDelegate: NSObject, URLSessionWebSocketDelegate {
-  var onOpen: ((String?) -> Void)?
-  var onClose: ((URLSessionWebSocketTask.CloseCode, Data?) -> Void)?
-  var onError: ((Error?) -> Void)?
+  // Each callback carries the task it fired for, so the @MainActor handler in
+  // connect() can tell a stale (already-replaced) task's callback apart from the
+  // current attempt's — see the identity checks in connect()/startReceiving().
+  var onOpen: ((URLSessionWebSocketTask) -> Void)?
+  var onClose: ((URLSessionWebSocketTask, URLSessionWebSocketTask.CloseCode, Data?) -> Void)?
+  var onError: ((URLSessionTask, Error?) -> Void)?
 
   func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
-                  didOpenWithProtocol protocol: String?) { onOpen?(nil) }
+                  didOpenWithProtocol protocol: String?) { onOpen?(webSocketTask) }
 
   func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask,
                   didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-    onClose?(closeCode, reason)
+    onClose?(webSocketTask, closeCode, reason)
   }
 
   func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-    if let error { onError?(error) }
+    if let error { onError?(task, error) }
   }
 }
