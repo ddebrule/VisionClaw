@@ -52,6 +52,7 @@
 		A1B2C3D42F0A00020000000A /* PixelBufferImageRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D42F0A00010000000A /* PixelBufferImageRenderer.swift */; };
 		A1B2C3D42F0A00020000000B /* Accessibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D42F0A00010000000B /* Accessibility.swift */; };
 		A1B2C3D42F0A00020000000C /* ScoutOutbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D42F0A00010000000C /* ScoutOutbox.swift */; };
+		A1B2C3D42F0A00020000000D /* SpokenCues.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D42F0A00010000000D /* SpokenCues.swift */; };
 		E66D30242E7DA71900470B48 /* MockDeviceKitButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = E66D30232E7DA71900470B48 /* MockDeviceKitButton.swift */; };
 		E6A188482EB918740097D0E1 /* StreamView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6A188472EB918740097D0E1 /* StreamView.swift */; };
 		E6DA451D2E79A63100E3F688 /* MockDeviceCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6DA45182E79A63100E3F688 /* MockDeviceCardView.swift */; };
@@ -129,6 +130,7 @@
 		A1B2C3D42F0A00010000000A /* PixelBufferImageRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PixelBufferImageRenderer.swift; sourceTree = "<group>"; };
 		A1B2C3D42F0A00010000000B /* Accessibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Accessibility.swift; sourceTree = "<group>"; };
 		A1B2C3D42F0A00010000000C /* ScoutOutbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoutOutbox.swift; sourceTree = "<group>"; };
+		A1B2C3D42F0A00010000000D /* SpokenCues.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenCues.swift; sourceTree = "<group>"; };
 		E66D30232E7DA71900470B48 /* MockDeviceKitButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockDeviceKitButton.swift; sourceTree = "<group>"; };
 		E699CC952E8150670052C240 /* CameraAccessTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = CameraAccessTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E6A188472EB918740097D0E1 /* StreamView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamView.swift; sourceTree = "<group>"; };
@@ -294,6 +296,7 @@
 				A1B2C3D42F0A000100000004 /* GeminiSessionViewModel.swift */,
 				A1B2C3D42F0A000100000006 /* SpectreScoutBridge.swift */,
 				A1B2C3D42F0A00010000000C /* ScoutOutbox.swift */,
+				A1B2C3D42F0A00010000000D /* SpokenCues.swift */,
 			);
 			path = Gemini;
 			sourceTree = "<group>";
@@ -465,6 +468,7 @@
 				A1B2C3D42F0A000200000008 /* GlassesEventLogView.swift in Sources */,
 				A1B2C3D42F0A00020000000B /* Accessibility.swift in Sources */,
 				A1B2C3D42F0A00020000000C /* ScoutOutbox.swift in Sources */,
+				A1B2C3D42F0A00020000000D /* SpokenCues.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -2,6 +2,14 @@ import Foundation
 import SwiftUI
 import AVFoundation
 
+/// How an End went, so callers (the fold-to-end countdown) can say so.
+enum EndScoutResult {
+  case sent
+  case queued
+  case nothingToSend
+  case testMode
+}
+
 // MARK: - GeminiSessionViewModel
 
 @MainActor
@@ -23,7 +31,9 @@ class GeminiSessionViewModel: ObservableObject {
 
   // Resolved at session start
   private(set) var spectreSessionId: String = ""
-  private(set) var scoutContext: String = ""
+  /// Race always reports from the driver's stand (spec §B2).
+  static let raceContext = "Driver Stand"
+  private(set) var spectreTrackName: String = ""
   private(set) var scoutVehicleModel: String = ""
 
   private let geminiService = GeminiLiveService()
@@ -41,6 +51,9 @@ class GeminiSessionViewModel: ObservableObject {
   private var reconnectTask: Task<Void, Never>?
   // goAway arrived mid-reply; reconnect once the turn completes.
   private var reconnectWhenIdle = false
+  // Race silence rule (30 min warn, 45 min end); checked every 30 s while active.
+  private var idleGuard = IdleGuard(now: 0)
+  private var idleTicker: Task<Void, Never>?
 
   var streamingMode: StreamingMode = .glasses
 
@@ -68,7 +81,7 @@ class GeminiSessionViewModel: ObservableObject {
     isFetchingSession = false
 
     spectreSessionId = sessionInfo.sessionId
-    scoutContext = ""
+    spectreTrackName = sessionInfo.track
     scoutVehicleModel = ""
     sessionVehicles = sessionInfo.vehicles
 
@@ -93,6 +106,8 @@ class GeminiSessionViewModel: ObservableObject {
     scoutReportSent = false
     reconnectWhenIdle = false
     geminiService.resetResumption()
+    idleGuard = IdleGuard(now: ProcessInfo.processInfo.systemUptime)
+    startIdleTicker()
 
     audioManager.onAudioCaptured = { [weak self] data in
       guard let self else { return }
@@ -117,6 +132,7 @@ class GeminiSessionViewModel: ObservableObject {
     geminiService.onOutputTranscription = { [weak self] text in
       guard let self else { return }
       Task { @MainActor in
+        self.idleGuard.noteActivity(at: ProcessInfo.processInfo.systemUptime)
         self.aiTranscript += text
         self.pendingAIText += text
       }
@@ -149,6 +165,7 @@ class GeminiSessionViewModel: ObservableObject {
     geminiService.onInputTranscription = { [weak self] text in
       guard let self else { return }
       Task { @MainActor in
+        self.idleGuard.noteActivity(at: ProcessInfo.processInfo.systemUptime)
         self.userTranscript += text
         self.pendingUserText += text
         self.aiTranscript = ""
@@ -227,6 +244,8 @@ class GeminiSessionViewModel: ObservableObject {
   func stopSession() {
     reconnectTask?.cancel()
     reconnectTask = nil
+    idleTicker?.cancel()
+    idleTicker = nil
     isReconnecting = false
     reconnectWhenIdle = false
     flushPendingTurn()
@@ -247,12 +266,14 @@ class GeminiSessionViewModel: ObservableObject {
     scoutReportSent = false
   }
 
-  /// Send accumulated field report to Spectre Setup_IQ and end the session.
-  func endScout() async {
+  /// Ends the Race and hands the transcript to the Outbox, which saves it
+  /// before sending and keeps retrying if the signal is gone.
+  @discardableResult
+  func endScout() async -> EndScoutResult {
     flushPendingTurn()
     guard !spectreSessionId.isEmpty, !scoutHistory.isEmpty else {
       stopSession()
-      return
+      return .nothingToSend
     }
 
     if SettingsManager.shared.scoutTestMode {
@@ -262,28 +283,29 @@ class GeminiSessionViewModel: ObservableObject {
       NSLog("[ScoutVM] Test mode: report not sent (%d turns, %d min)", turns, minutes)
       scoutReportSent = true
       errorMessage = "Test mode — report not sent (\(turns) turns, \(minutes) min)"
-      return
+      return .testMode
     }
 
     isSendingScoutReport = true
     stopSession()
-    let duration = scoutStartTime.map { Int(Date().timeIntervalSince($0) / 60) } ?? 0
-    let context = scoutContext.isEmpty ? "Unspecified" : scoutContext
-    let vehicle = scoutVehicleModel.isEmpty ? "Unspecified" : scoutVehicleModel
-    do {
-      try await scoutBridge.sendReport(
-        sessionId: spectreSessionId,
-        transcript: scoutHistory,
-        durationMin: duration,
-        scoutContext: context,
-        vehicleModel: vehicle
-      )
-      scoutReportSent = true
-    } catch {
-      NSLog("[ScoutVM] Failed to send report: %@", error.localizedDescription)
-      errorMessage = "Scout report failed to send. Check your connection."
-    }
+    let capture = Capture(
+      mode: .race,
+      sessionId: spectreSessionId,
+      trackName: spectreTrackName,
+      transcript: scoutHistory.map { TranscriptLine(role: $0.role, text: $0.text) },
+      scoutContext: Self.raceContext,
+      vehicleModel: scoutVehicleModel.isEmpty ? "Unspecified" : scoutVehicleModel,
+      durationMin: scoutStartTime.map { Int(Date().timeIntervalSince($0) / 60) } ?? 0)
+    // Saved to disk inside submit before the first attempt, so the transcript
+    // is safe from here on even if this send fails.
+    scoutReportSent = true
+    let state = await ScoutOutbox.shared.submit(capture)
     isSendingScoutReport = false
+    if state == .done {
+      return .sent
+    }
+    errorMessage = "No signal — the report is saved and will send automatically. See Settings → Scout reports."
+    return .queued
   }
 
   /// Sends one frame to Gemini. The caller (StreamSessionViewModel's FrameHub
@@ -295,6 +317,27 @@ class GeminiSessionViewModel: ObservableObject {
   }
 
   // MARK: - Private
+
+  private func startIdleTicker() {
+    idleTicker?.cancel()
+    idleTicker = Task { @MainActor [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(for: .seconds(30))
+        guard let self, !Task.isCancelled, self.isGeminiActive else { return }
+        switch self.idleGuard.check(at: ProcessInfo.processInfo.systemUptime) {
+        case .none:
+          break
+        case .warn:
+          NSLog("[ScoutVM] Idle 30 min: reminding")
+          SpokenCues.shared.speak("Scout still running")
+        case .end:
+          NSLog("[ScoutVM] Idle 45 min: ending the Race")
+          await self.endScout()
+          return
+        }
+      }
+    }
+  }
 
   /// Resolve the active Spectre session, or a synthetic one when Scout test mode is on
   /// (device-testing Gemini Live with no SPECTRE session running).
@@ -362,18 +405,9 @@ class GeminiSessionViewModel: ObservableObject {
     pendingAIText = ""
   }
 
-  /// Parse racer responses from the opening sequence to extract context and vehicle model.
-  /// Scout_IQ confirms answers with "Locked in. [vehicle] — [context]." — we watch for that pattern
-  /// in AI output. As a fallback we also watch racer input for known keywords.
+  /// Pick out which vehicle the racer named, from their own words.
   private func extractOpeningSequenceAnswers(from racerText: String) {
     let lower = racerText.lowercased()
-
-    if scoutContext.isEmpty {
-      if lower.contains("track walk") || lower.contains("walk") { scoutContext = "Track Walk" }
-      else if lower.contains("qualifying") || lower.contains("qual") { scoutContext = "Qualifying" }
-      else if lower.contains("practice") { scoutContext = "Practice" }
-      else if lower.contains("between") || lower.contains("post") { scoutContext = "Between Rounds" }
-    }
 
     if scoutVehicleModel.isEmpty {
       for vehicle in sessionVehicles {
