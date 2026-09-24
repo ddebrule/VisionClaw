@@ -15,6 +15,11 @@ class GeminiSessionViewModel: ObservableObject {
   @Published var isSendingScoutReport: Bool = false
   @Published var scoutReportSent: Bool = false
   @Published var isFetchingSession: Bool = false
+  @Published var isReconnecting: Bool = false
+
+  /// A transcript exists that has not reached Setup_IQ. End stays available for it
+  /// even after the live connection is gone.
+  var hasUnsentReport: Bool { !scoutHistory.isEmpty && !scoutReportSent }
 
   // Resolved at session start
   private(set) var spectreSessionId: String = ""
@@ -28,16 +33,22 @@ class GeminiSessionViewModel: ObservableObject {
 
   // Scout_IQ transcript accumulation
   private let scoutBridge = SpectreScoutBridge()
-  private var scoutHistory: [ScoutTranscriptEntry] = []
+  @Published private var scoutHistory: [ScoutTranscriptEntry] = []
   private var scoutStartTime: Date?
   private var pendingUserText: String = ""
   private var pendingAIText: String = ""
   private var sessionVehicles: [String] = []  // vehicle model names from active session
+  private var dynamicInstruction: String = ""
+  private var reconnectTask: Task<Void, Never>?
 
   var streamingMode: StreamingMode = .glasses
 
   func startSession() async {
     guard !isGeminiActive else { return }
+    guard !hasUnsentReport else {
+      errorMessage = "Send or discard the last Scout report first (tap End)."
+      return
+    }
     guard GeminiConfig.isConfigured else {
       errorMessage = "Gemini API key not configured."
       return
@@ -65,7 +76,7 @@ class GeminiSessionViewModel: ObservableObject {
       ? "No vehicles found in garage."
       : sessionInfo.vehicles.map { "- \($0)" }.joined(separator: "\n")
 
-    let dynamicInstruction = GeminiConfig.defaultSystemInstruction + """
+    dynamicInstruction = GeminiConfig.defaultSystemInstruction + """
 
     ─── VEHICLES IN RACER'S GARAGE ───
     \(vehicleList)
@@ -79,6 +90,7 @@ class GeminiSessionViewModel: ObservableObject {
     pendingUserText = ""
     pendingAIText = ""
     scoutReportSent = false
+    geminiService.resetResumption()
 
     audioManager.onAudioCaptured = { [weak self] data in
       guard let self else { return }
@@ -137,9 +149,14 @@ class GeminiSessionViewModel: ObservableObject {
     geminiService.onDisconnected = { [weak self] reason in
       guard let self else { return }
       Task { @MainActor in
-        guard self.isGeminiActive else { return }
-        self.stopSession()
-        self.errorMessage = "Connection lost: \(reason ?? "Unknown error")"
+        self.reconnect(reason: reason ?? "Unknown error")
+      }
+    }
+
+    geminiService.onGoAway = { [weak self] _ in
+      guard let self else { return }
+      Task { @MainActor in
+        self.reconnect(reason: "server connection limit")
       }
     }
 
@@ -190,6 +207,10 @@ class GeminiSessionViewModel: ObservableObject {
   }
 
   func stopSession() {
+    reconnectTask?.cancel()
+    reconnectTask = nil
+    isReconnecting = false
+    flushPendingTurn()
     audioManager.stopCapture()
     geminiService.disconnect()
     stateObservation?.cancel()
@@ -199,8 +220,12 @@ class GeminiSessionViewModel: ObservableObject {
     isModelSpeaking = false
     userTranscript = ""
     aiTranscript = ""
-    pendingUserText = ""
-    pendingAIText = ""
+  }
+
+  /// Throw away an unsent transcript (the racer chose Discard).
+  func discardReport() {
+    scoutHistory = []
+    scoutReportSent = false
   }
 
   /// Send accumulated field report to Spectre Setup_IQ and end the session.
@@ -240,6 +265,55 @@ class GeminiSessionViewModel: ObservableObject {
   }
 
   // MARK: - Private
+
+  /// Keep a Race going across Google's ~10-minute connection limit and signal drops.
+  /// Audio capture keeps running; GeminiLiveService drops audio until it is ready again.
+  private func reconnect(reason: String) {
+    guard isGeminiActive, reconnectTask == nil else { return }
+    NSLog("[ScoutVM] Reconnecting Gemini: %@", reason)
+    isReconnecting = true
+    audioManager.stopPlayback()
+    flushPendingTurn()
+    reconnectTask = Task { [weak self] in
+      guard let self else { return }
+      var failures = 0
+      while let delay = ReconnectPolicy.delay(afterConsecutiveFailures: failures) {
+        if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
+        guard !Task.isCancelled, self.isGeminiActive else { return }
+        if failures == ReconnectPolicy.dropHandleAfterFailures {
+          NSLog("[ScoutVM] Resumption handle refused twice; starting a fresh Gemini session")
+          self.geminiService.resetResumption()
+        }
+        self.geminiService.disconnect()
+        if await self.geminiService.connect(systemInstruction: self.dynamicInstruction) {
+          NSLog("[ScoutVM] Gemini reconnected (resumed: %@)",
+                self.geminiService.resumptionHandle == nil ? "no" : "yes")
+          self.isReconnecting = false
+          self.reconnectTask = nil
+          return
+        }
+        failures += 1
+      }
+      self.isReconnecting = false
+      self.reconnectTask = nil
+      guard self.isGeminiActive else { return }
+      self.stopSession()
+      self.errorMessage = "Connection lost (\(reason)). Tap End to send what was captured."
+    }
+  }
+
+  /// Move any half-finished turn into the transcript so a drop or stop never loses it.
+  private func flushPendingTurn() {
+    if !pendingUserText.isEmpty {
+      scoutHistory.append(ScoutTranscriptEntry(role: "user", text: pendingUserText))
+      extractOpeningSequenceAnswers(from: pendingUserText)
+    }
+    if !pendingAIText.isEmpty {
+      scoutHistory.append(ScoutTranscriptEntry(role: "assistant", text: pendingAIText))
+    }
+    pendingUserText = ""
+    pendingAIText = ""
+  }
 
   /// Parse racer responses from the opening sequence to extract context and vehicle model.
   /// Scout_IQ confirms answers with "Locked in. [vehicle] — [context]." — we watch for that pattern

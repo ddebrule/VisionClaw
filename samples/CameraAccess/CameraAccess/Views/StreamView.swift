@@ -153,7 +153,7 @@ struct ControlsView: View {
       .opacity(webrtcVM.isActive ? 0.4 : 1.0)
       .disabled(webrtcVM.isActive)
 
-      if geminiVM.isGeminiActive {
+      if geminiVM.isGeminiActive || geminiVM.hasUnsentReport {
         CircleButton(
           icon: geminiVM.isSendingScoutReport ? "arrow.up.circle" : "flag.checkered.circle.fill",
           text: "End"
@@ -168,6 +168,10 @@ struct ControlsView: View {
         ) {
           Button("Send Report to Setup_IQ", role: .none) {
             Task { await geminiVM.endScout() }
+          }
+          Button("Discard report", role: .destructive) {
+            geminiVM.stopSession()
+            geminiVM.discardReport()
           }
           Button("Cancel", role: .cancel) {}
         } message: {
