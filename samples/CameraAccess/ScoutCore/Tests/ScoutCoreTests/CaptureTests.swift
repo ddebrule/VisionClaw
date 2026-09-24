@@ -43,12 +43,20 @@ final class CaptureTests: XCTestCase {
     XCTAssertFalse(OutboxRules.needsSend(capture))
   }
 
-  func testAcceptedTrackWalkIsReported() {
-    var capture = Capture(
-      mode: .trackWalk, sessionId: "s", trackName: "t", transcript: [],
-      scoutContext: "Track Walk", vehicleModel: "", durationMin: 7)
+  func testAcceptedTrackWalkWithVideoIsReported() {
+    var capture = walk(state: .reportPending)
+    capture.videoFileName = "22222222-3333-4444-5555-666666666666.mp4"
     OutboxRules.apply(.accepted, to: &capture)
     XCTAssertEqual(capture.state, .reported)
+    XCTAssertEqual(capture.reportAccepted, true)
+  }
+
+  func testAcceptedTrackWalkWithoutVideoIsDone() {
+    var capture = walk(state: .reportPending)
+    capture.videoFileName = nil
+    OutboxRules.apply(.accepted, to: &capture)
+    XCTAssertEqual(capture.state, .done)
+    XCTAssertEqual(capture.reportAccepted, true)
   }
 
   func testTransientFailureIsRetryable() {
@@ -206,5 +214,112 @@ final class CaptureTests: XCTestCase {
     XCTAssertEqual(captures.count, 1)
     XCTAssertNil(captures[0].videoFileName)
     XCTAssertNil(captures[0].noNarration)
+  }
+
+  private func reportedWalk() -> Capture {
+    var capture = walk(state: .reportPending)
+    capture.videoFileName = "22222222-3333-4444-5555-666666666666.mp4"
+    OutboxRules.apply(.accepted, to: &capture)
+    return capture
+  }
+
+  func testReportedWalkNeedsUploadOnlyWhenReportsEnabled() {
+    let capture = reportedWalk()
+    XCTAssertTrue(OutboxRules.needsUpload(capture, trackWalkReportsEnabled: true))
+    XCTAssertFalse(OutboxRules.needsUpload(capture, trackWalkReportsEnabled: false))
+    XCTAssertFalse(OutboxRules.needsSend(capture))
+  }
+
+  func testRaceNeverNeedsUpload() {
+    var capture = race()
+    OutboxRules.apply(.accepted, to: &capture)
+    XCTAssertFalse(OutboxRules.needsUpload(capture))
+  }
+
+  func testBeginUploadStoresMediaId() {
+    var capture = reportedWalk()
+    OutboxRules.beginUpload(&capture, mediaId: "m-1")
+    XCTAssertEqual(capture.state, .uploading)
+    XCTAssertEqual(capture.mediaId, "m-1")
+    XCTAssertTrue(OutboxRules.needsUpload(capture))
+  }
+
+  func testCompletedUploadIsDone() {
+    var capture = reportedWalk()
+    OutboxRules.beginUpload(&capture, mediaId: "m-1")
+    OutboxRules.applyUpload(.completed, to: &capture)
+    XCTAssertEqual(capture.state, .done)
+    XCTAssertNil(capture.lastError)
+    XCTAssertFalse(OutboxRules.needsUpload(capture))
+  }
+
+  func testInProgressStepsChangeNothing() {
+    var capture = reportedWalk()
+    OutboxRules.beginUpload(&capture, mediaId: "m-1")
+    let before = capture
+    OutboxRules.applyUpload(.complete(mediaId: "m-1"), to: &capture)
+    OutboxRules.applyUpload(.upload(mediaId: "m-1", putURL: URL(string: "https://x.test/put")!), to: &capture)
+    XCTAssertEqual(capture, before)
+  }
+
+  func testRejectedUploadIsFinal() {
+    var capture = reportedWalk()
+    OutboxRules.applyUpload(.rejected("Over 2 GB — record at 1080p or trim it"), to: &capture)
+    XCTAssertEqual(capture.state, .failed)
+    XCTAssertFalse(capture.retryable)
+    XCTAssertEqual(capture.lastError, "Upload refused: Over 2 GB — record at 1080p or trim it")
+    XCTAssertFalse(OutboxRules.needsUpload(capture))
+  }
+
+  func testTransientUploadFailureIsRetried() {
+    var capture = reportedWalk()
+    OutboxRules.applyUpload(.transient("offline"), to: &capture)
+    XCTAssertEqual(capture.state, .failed)
+    XCTAssertTrue(capture.retryable)
+    XCTAssertEqual(capture.lastError, "offline")
+    XCTAssertTrue(OutboxRules.needsUpload(capture))
+  }
+
+  func testFailedUploadDoesNotNeedSend() {
+    var capture = reportedWalk()
+    OutboxRules.applyUpload(.transient("offline"), to: &capture)
+    XCTAssertFalse(OutboxRules.needsSend(capture))
+  }
+
+  func testRetryAfterUploadFailureReturnsToReported() {
+    var capture = reportedWalk()
+    OutboxRules.applyUpload(.rejected("Not found"), to: &capture)
+    OutboxRules.retry(&capture)
+    XCTAssertEqual(capture.state, .reported)
+    XCTAssertTrue(capture.retryable)
+    XCTAssertNil(capture.lastError)
+    XCTAssertEqual(capture.uploadAttempts, 0)
+    XCTAssertFalse(OutboxRules.needsSend(capture))
+    XCTAssertTrue(OutboxRules.needsUpload(capture))
+  }
+
+  func testReuploadGoesBackToReported() {
+    var capture = reportedWalk()
+    OutboxRules.beginUpload(&capture, mediaId: "m-1")
+    OutboxRules.applyUpload(.reupload, to: &capture)
+    XCTAssertEqual(capture.state, .reported)
+    XCTAssertEqual(capture.uploadAttempts, 1)
+    XCTAssertEqual(capture.mediaId, "m-1")
+  }
+
+  func testReuploadCappedAtThree() {
+    var capture = reportedWalk()
+    for _ in 0..<3 { OutboxRules.applyUpload(.reupload, to: &capture) }
+    XCTAssertEqual(capture.state, .failed)
+    XCTAssertFalse(capture.retryable)
+    XCTAssertEqual(capture.lastError, "Upload refused: storage kept refusing the video")
+  }
+
+  func testUploadFieldsRoundTrip() throws {
+    var capture = reportedWalk()
+    OutboxRules.beginUpload(&capture, mediaId: "m-1")
+    capture.uploadNetwork = .wifiOnly
+    capture.timeZone = "America/Denver"
+    XCTAssertEqual(try OutboxCoding.decode(OutboxCoding.encode([capture])), [capture])
   }
 }

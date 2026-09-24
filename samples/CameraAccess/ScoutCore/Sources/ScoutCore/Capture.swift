@@ -7,12 +7,14 @@ public enum CaptureMode: String, Codable, Sendable {
 }
 
 /// Where a capture is in its trip to SPECTRE. Race: reportPending → done.
-/// Track Walk: recording → recorded → reportPending → reported (Plan 7 continues to the video upload).
+/// Track Walk: recording → recorded → reportPending → reported → uploading → done.
+/// `failed` can follow any network step; `reportAccepted` says which side of the report it is on.
 public enum CaptureState: String, Codable, Sendable {
   case recording
   case recorded
   case reportPending
   case reported
+  case uploading
   case done
   case failed
 }
@@ -50,6 +52,16 @@ public struct Capture: Codable, Equatable, Identifiable, Sendable {
   public var noNarration: Bool?
   /// Track Walk: already saved to the Photos library.
   public var savedToPhotos: Bool?
+  /// Track Walk: SPECTRE accepted the text report, so a failure after this is the video's.
+  public var reportAccepted: Bool?
+  /// Track Walk: SPECTRE's media item for the video, once created.
+  public var mediaId: String?
+  /// Track Walk: the owner's answer to "Upload now on cellular?"; nil until asked.
+  public var uploadNetwork: UploadNetwork?
+  /// Track Walk: uploads storage refused (expired signature) since the last success or Retry.
+  public var uploadAttempts: Int?
+  /// Track Walk: the IANA time zone the walk was recorded in.
+  public var timeZone: String?
 
   public init(
     id: UUID = UUID(),
@@ -80,6 +92,11 @@ public struct Capture: Codable, Equatable, Identifiable, Sendable {
     self.videoFileName = videoFileName
     self.noNarration = nil
     self.savedToPhotos = nil
+    self.reportAccepted = nil
+    self.mediaId = nil
+    self.uploadNetwork = nil
+    self.uploadAttempts = nil
+    self.timeZone = nil
   }
 }
 
@@ -107,8 +124,8 @@ public enum OutboxRules {
     if capture.mode == .trackWalk && !trackWalkReportsEnabled { return false }
     switch capture.state {
     case .reportPending: return true
-    case .failed: return capture.retryable
-    case .recording, .recorded, .reported, .done: return false
+    case .failed: return capture.retryable && capture.reportAccepted != true
+    case .recording, .recorded, .reported, .uploading, .done: return false
     }
   }
 
@@ -148,7 +165,12 @@ public enum OutboxRules {
   public static func apply(_ outcome: ReportOutcome, to capture: inout Capture) {
     switch outcome {
     case .accepted:
-      capture.state = capture.mode == .race ? .done : .reported
+      if capture.mode == .race {
+        capture.state = .done
+      } else {
+        capture.reportAccepted = true
+        capture.state = capture.videoFileName == nil ? .done : .reported
+      }
       capture.lastError = nil
       capture.retryable = true
     case .rejected(let reason):
@@ -163,11 +185,67 @@ public enum OutboxRules {
   }
 
   /// The user's Retry: revives any failed capture, including a rejected one.
+  /// A walk whose report SPECTRE already has goes back to its upload, never re-sending the report.
   public static func retry(_ capture: inout Capture) {
     guard capture.state == .failed else { return }
-    capture.state = .reportPending
+    if capture.reportAccepted == true {
+      capture.state = .reported
+      capture.uploadAttempts = 0
+    } else {
+      capture.state = .reportPending
+    }
     capture.lastError = nil
     capture.retryable = true
+  }
+
+  /// A Track Walk whose video still has to reach SPECTRE. `.uploading` is included:
+  /// the app checks separately whether a background task is already carrying it.
+  public static func needsUpload(_ capture: Capture, trackWalkReportsEnabled: Bool = true) -> Bool {
+    guard capture.mode == .trackWalk, trackWalkReportsEnabled, capture.videoFileName != nil else { return false }
+    switch capture.state {
+    case .reported, .uploading: return true
+    case .failed: return capture.retryable && capture.reportAccepted == true
+    case .recording, .recorded, .reportPending, .done: return false
+    }
+  }
+
+  /// SPECTRE created (or re-issued) the media item; bytes are about to move.
+  public static func beginUpload(_ capture: inout Capture, mediaId: String) {
+    capture.mediaId = mediaId
+    capture.state = .uploading
+    capture.lastError = nil
+  }
+
+  /// Records a finished upload step. `.upload` and `.complete` are steps still
+  /// in progress and change nothing.
+  public static func applyUpload(_ step: UploadStep, to capture: inout Capture) {
+    switch step {
+    case .upload, .complete:
+      return
+    case .completed:
+      capture.state = .done
+      capture.lastError = nil
+      capture.retryable = true
+      capture.uploadAttempts = 0
+    case .reupload:
+      let attempts = (capture.uploadAttempts ?? 0) + 1
+      capture.uploadAttempts = attempts
+      if attempts >= UploadRules.maxReuploads {
+        capture.state = .failed
+        capture.lastError = "Upload refused: storage kept refusing the video"
+        capture.retryable = false
+      } else {
+        capture.state = .reported
+      }
+    case .rejected(let reason):
+      capture.state = .failed
+      capture.lastError = "Upload refused: \(reason)"
+      capture.retryable = false
+    case .transient(let reason):
+      capture.state = .failed
+      capture.lastError = reason
+      capture.retryable = true
+    }
   }
 
   /// Keeps every capture that is not done, plus the newest `keepingDone` done ones.
