@@ -947,10 +947,10 @@ Expected: green.
 - [ ] 10 minutes of glasses streaming with the screen on: no freeze.
 
 **Review Focus checks:**
-- [ ] **(1)** Talk to Scout for 12 minutes or more. The session keeps going past about 10 minutes, and the log shows `goAway` followed by `Gemini reconnected (resumed: yes)`. End sends a report that contains both early and late turns.
-- [ ] **(2)** Mid-session, turn on Airplane Mode for 30 s, then turn it off. The app reconnects. Repeat with Airplane Mode on for 60 s or more: you see "Connection lost … Tap End to send what was captured". Turn Airplane Mode off, tap End → Send: the report arrives in SPECTRE.
+- [ ] **(1)** Talk to Scout for 12 minutes or more. The session keeps going past about 10 minutes. After the ~10-minute mark (the log shows `goAway`), ask "Which vehicle are we on?": Scout answers from memory and does NOT re-run its opening questions. Also confirm that the reply in progress when `goAway` arrived was not cut off mid-sentence. End sends a report that contains both early and late turns.
+- [ ] **(2)** Mid-session, turn on Airplane Mode for 30 s, then turn it off. The app reconnects. Repeat with Airplane Mode on for 90 s or more: you see "Connection lost … Tap End to send what was captured". Turn Airplane Mode off, tap End → Send: the report arrives in SPECTRE.
 - [ ] **(3)** No field step. It's covered by the unit test and the log line `Resumption handle refused twice`, if it ever appears.
 - [ ] **(4)** Make the last send fail (Airplane Mode at End), then tap Scout. You see "Send or discard the last Scout report first (tap End)." End → Discard clears it, and Scout then starts.
-- [ ] **(5)** In iPhone mode, ask a long question and let the reply finish. Talk again: Scout hears you. Then interrupt a reply by pressing Scout off and on: the mic still works.
+- [ ] **(5)** In iPhone mode, ask a long question and let the reply finish. Talk again: Scout hears you. Then interrupt a reply by toggling Airplane Mode for ~5 s: after reconnect, Scout hears you. Finally, Scout off → End → Discard → Scout on: the mic works and Scout starts.
 
 - [ ] **Step 3:** If every box is ticked, Stage 1 is done. Next is writing Plan 2 (Stage 2), whose first task is the Vanguard gate.

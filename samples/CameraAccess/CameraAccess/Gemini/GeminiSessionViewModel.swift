@@ -40,6 +40,8 @@ class GeminiSessionViewModel: ObservableObject {
   private var sessionVehicles: [String] = []  // vehicle model names from active session
   private var dynamicInstruction: String = ""
   private var reconnectTask: Task<Void, Never>?
+  // goAway arrived mid-reply; reconnect once the turn completes.
+  private var reconnectWhenIdle = false
 
   var streamingMode: StreamingMode = .glasses
 
@@ -90,6 +92,7 @@ class GeminiSessionViewModel: ObservableObject {
     pendingUserText = ""
     pendingAIText = ""
     scoutReportSent = false
+    reconnectWhenIdle = false
     geminiService.resetResumption()
 
     audioManager.onAudioCaptured = { [weak self] data in
@@ -136,6 +139,11 @@ class GeminiSessionViewModel: ObservableObject {
         self.pendingAIText = ""
         self.userTranscript = ""
         self.aiTranscript = ""
+        if self.reconnectWhenIdle {
+          self.reconnectWhenIdle = false
+          // The reply is complete but its tail may still be playing; let it finish.
+          self.reconnect(reason: "server connection limit", cutPlayback: false)
+        }
       }
     }
 
@@ -155,10 +163,19 @@ class GeminiSessionViewModel: ObservableObject {
       }
     }
 
+    // The socket stays usable after goAway, so let an in-flight reply finish and
+    // reconnect at the next turn boundary. The server's own close still arrives via
+    // onDisconnected as a backstop.
     geminiService.onGoAway = { [weak self] _ in
       guard let self else { return }
       Task { @MainActor in
-        self.reconnect(reason: "server connection limit")
+        let idle = !self.geminiService.isModelSpeaking && !self.audioManager.isSpeakerActive
+          && self.pendingUserText.isEmpty && self.pendingAIText.isEmpty
+        if idle {
+          self.reconnect(reason: "server connection limit")
+        } else {
+          self.reconnectWhenIdle = true
+        }
       }
     }
 
@@ -212,6 +229,7 @@ class GeminiSessionViewModel: ObservableObject {
     reconnectTask?.cancel()
     reconnectTask = nil
     isReconnecting = false
+    reconnectWhenIdle = false
     flushPendingTurn()
     audioManager.stopCapture()
     geminiService.disconnect()
@@ -232,6 +250,7 @@ class GeminiSessionViewModel: ObservableObject {
 
   /// Send accumulated field report to Spectre Setup_IQ and end the session.
   func endScout() async {
+    flushPendingTurn()
     guard !spectreSessionId.isEmpty, !scoutHistory.isEmpty else {
       stopSession()
       return
@@ -270,21 +289,28 @@ class GeminiSessionViewModel: ObservableObject {
 
   /// Keep a Race going across Google's ~10-minute connection limit and signal drops.
   /// Audio capture keeps running; GeminiLiveService drops audio until it is ready again.
-  private func reconnect(reason: String) {
+  /// `cutPlayback: false` lets an already-complete reply finish playing (goAway at a turn boundary).
+  private func reconnect(reason: String, cutPlayback: Bool = true) {
+    // Any reconnect replaces the connection a pending goAway referred to.
+    reconnectWhenIdle = false
     guard isGeminiActive, reconnectTask == nil else { return }
     NSLog("[ScoutVM] Reconnecting Gemini: %@", reason)
     isReconnecting = true
-    audioManager.stopPlayback()
+    if cutPlayback { audioManager.stopPlayback() }
     flushPendingTurn()
     reconnectTask = Task { [weak self] in
       guard let self else { return }
       var failures = 0
+      // Only attempts the server refused during setup count against the handle;
+      // a network drop says nothing about whether the handle is stale.
+      var refusals = 0
       while let delay = ReconnectPolicy.delay(afterConsecutiveFailures: failures) {
         if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
         guard !Task.isCancelled, self.isGeminiActive else { return }
-        if failures == ReconnectPolicy.dropHandleAfterFailures {
-          NSLog("[ScoutVM] Resumption handle refused twice; starting a fresh Gemini session")
+        if refusals == ReconnectPolicy.dropHandleAfterFailures {
+          NSLog("[ScoutVM] Resumption handle refused twice by the server; starting a fresh Gemini session")
           self.geminiService.resetResumption()
+          refusals += 1  // reset only once per reconnect
         }
         self.geminiService.disconnect()
         if await self.geminiService.connect(systemInstruction: self.dynamicInstruction) {
@@ -294,6 +320,7 @@ class GeminiSessionViewModel: ObservableObject {
           self.reconnectTask = nil
           return
         }
+        if self.geminiService.lastAttemptReachedServer { refusals += 1 }
         failures += 1
       }
       self.isReconnecting = false

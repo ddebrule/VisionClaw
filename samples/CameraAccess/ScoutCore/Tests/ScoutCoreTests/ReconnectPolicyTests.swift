@@ -13,8 +13,14 @@ final class ReconnectPolicyTests: XCTestCase {
     XCTAssertEqual(ReconnectPolicy.delay(afterConsecutiveFailures: 4), 8)
   }
 
-  func testGivesUpAfterFiveFailures() {
-    XCTAssertNil(ReconnectPolicy.delay(afterConsecutiveFailures: 5))
+  func testBackoffCapsAtFifteenSeconds() {
+    XCTAssertEqual(ReconnectPolicy.delay(afterConsecutiveFailures: 5), 15)
+    XCTAssertEqual(ReconnectPolicy.delay(afterConsecutiveFailures: 6), 15)
+    XCTAssertEqual(ReconnectPolicy.delay(afterConsecutiveFailures: 7), 15)
+  }
+
+  func testGivesUpAfterEightFailures() {
+    XCTAssertNil(ReconnectPolicy.delay(afterConsecutiveFailures: 8))
     XCTAssertNil(ReconnectPolicy.delay(afterConsecutiveFailures: 50))
   }
 

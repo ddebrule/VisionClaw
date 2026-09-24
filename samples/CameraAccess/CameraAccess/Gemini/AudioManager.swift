@@ -163,7 +163,8 @@ class AudioManager {
   }
 
   func playAudio(data: Data) {
-    guard isCapturing, !data.isEmpty else { return }
+    // Scheduling on a player whose engine is stopped (interruption, reset) raises.
+    guard isCapturing, audioEngine.isRunning, !data.isEmpty else { return }
 
     let playerFormat = AVAudioFormat(
       commonFormat: .pcmFormatFloat32,
@@ -204,7 +205,8 @@ class AudioManager {
 
   func stopPlayback() {
     playerNode.stop()
-    playerNode.play()
+    // play() on a node whose engine is stopped raises an exception.
+    if audioEngine.isRunning { playerNode.play() }
   }
 
   func stopCapture() {
@@ -338,7 +340,9 @@ class AudioManager {
     NSLog("[Audio] Attempting audio reset")
     let wasCapturing = isCapturing
 
-    // Reset playback counter since pending buffers' completions may never fire after engine stop
+    // Flush pending buffers (their completions fire now), then reset the playback
+    // counter since any completion still outstanding may never fire after engine stop
+    if playerNode.engine != nil { playerNode.stop() }
     playbackCountLock.lock()
     scheduledPlaybackBuffers = 0
     playbackCountLock.unlock()

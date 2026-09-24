@@ -28,6 +28,9 @@ class GeminiLiveService: ObservableObject {
 
   private var resumption = LiveResumptionState()
   var resumptionHandle: String? { resumption.handle }
+  /// The last connect() opened the socket. A failed attempt with this set was
+  /// refused by the server during setup (not a network drop).
+  private(set) var lastAttemptReachedServer = false
   // Invalidates a stale connect-timeout task when a newer connect() starts.
   private var connectGeneration = 0
 
@@ -50,6 +53,7 @@ class GeminiLiveService: ObservableObject {
 
   func connect(systemInstruction: String? = nil) async -> Bool {
     pendingSystemInstruction = systemInstruction
+    lastAttemptReachedServer = false
     guard let url = GeminiConfig.websocketURL() else {
       connectionState = .error("No API key configured")
       return false
@@ -65,6 +69,7 @@ class GeminiLiveService: ObservableObject {
           // still `self.webSocketTask` is the live attempt; a stale task's callback
           // is silently dropped instead of resolving/failing the new attempt.
           guard task === self.webSocketTask else { return }
+          self.lastAttemptReachedServer = true
           self.connectionState = .settingUp
           self.sendSetupMessage()
           self.startReceiving()
