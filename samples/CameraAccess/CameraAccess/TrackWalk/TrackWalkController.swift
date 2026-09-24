@@ -98,10 +98,11 @@ final class TrackWalkController: ObservableObject {
       return
     }
     guard !cancelRequested else { cancelPreparing(recorder: recorder); return }
-    let capture = Capture(
+    var capture = Capture(
       id: id, mode: .trackWalk, sessionId: session.id, trackName: session.track,
       transcript: [], scoutContext: "Track Walk", vehicleModel: "", durationMin: 0,
       state: .recording, videoFileName: TrackWalkMedia.url(for: id, ext: "mov").lastPathComponent)
+    capture.timeZone = TimeZone.current.identifier
     // On disk before the first frame is written (the .mov is created on the
     // first video frame, after the subscription below), so a crash is recoverable.
     ScoutOutbox.shared.add(capture)

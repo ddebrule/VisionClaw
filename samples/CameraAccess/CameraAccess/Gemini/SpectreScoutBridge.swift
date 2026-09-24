@@ -144,8 +144,8 @@ class SpectreScoutBridge {
   }
 }
 
-/// Refuses HTTP redirects so a report can never be "delivered" to a login page.
-private final class RedirectRefuser: NSObject, URLSessionTaskDelegate {
+/// Refuses HTTP redirects so a report or upload can never be "delivered" to a login page.
+final class RedirectRefuser: NSObject, URLSessionTaskDelegate {
   func urlSession(
     _ session: URLSession, task: URLSessionTask,
     willPerformHTTPRedirection response: HTTPURLResponse,

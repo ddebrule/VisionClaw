@@ -84,6 +84,13 @@ final class ScoutOutbox: ObservableObject {
     OutboxRules.retry(&captures[index])
     save()
     reconcile()
+    TrackWalkUploader.shared.resumeAll()  // A failed upload's Retry goes back to `reported`.
+  }
+
+  /// Drops a capture for good (the owner's Delete). Files are the caller's to remove.
+  func remove(_ id: UUID) {
+    captures.removeAll { $0.id == id }
+    save()
   }
 
   private func reconcile() {
@@ -111,6 +118,9 @@ final class ScoutOutbox: ObservableObject {
     OutboxRules.apply(outcome, to: &captures[current])
     captures = OutboxRules.pruned(captures, keepingDone: Self.keepDone)
     save()
+    if captures.first(where: { $0.id == id })?.state == .reported {
+      TrackWalkUploader.shared.resumeAll()
+    }
     if case .transientFailure(let reason) = outcome {
       NSLog("[ScoutOutbox] %@ will retry: %@", id.uuidString, reason)
       scheduleRetry()
