@@ -59,13 +59,10 @@ final class UploadPrompt: NSObject, UNUserNotificationCenterDelegate {
     guard let raw = response.notification.request.content.userInfo["captureId"] as? String,
           let id = UUID(uuidString: raw)
     else { return }
-    let action = response.actionIdentifier
-    await MainActor.run {
-      switch action {
-      case Self.uploadNow: TrackWalkUploader.shared.choose(.cellularAllowed, for: id)
-      case Self.later: TrackWalkUploader.shared.choose(.wifiOnly, for: id)
-      default: break  // Tapped to open the app: Scout reports offers the same choice.
-      }
+    switch response.actionIdentifier {
+    case Self.uploadNow: await TrackWalkUploader.shared.choose(.cellularAllowed, for: id)
+    case Self.later: await TrackWalkUploader.shared.choose(.wifiOnly, for: id)
+    default: break  // Tapped to open the app: Scout reports offers the same choice.
     }
   }
 

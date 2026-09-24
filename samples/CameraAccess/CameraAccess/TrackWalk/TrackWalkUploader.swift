@@ -34,6 +34,8 @@ final class TrackWalkUploader: ObservableObject {
   private var backgroundCompletions: [String: () -> Void] = [:]
   private var retryTimer: Task<Void, Never>?
   private let pathMonitor = NWPathMonitor()
+  /// `start()`'s scan of the tasks already running from before a relaunch; `choose` waits on it.
+  private var taskScan: Task<Void, Never>?
 
   private init() {}
 
@@ -54,7 +56,7 @@ final class TrackWalkUploader: ObservableObject {
       }
     }
     pathMonitor.start(queue: DispatchQueue(label: "scout-upload-network"))
-    Task {
+    taskScan = Task {
       for session in [wifiSession, cellularSession] {
         for task in await session.allTasks where task.state == .running || task.state == .suspended {
           if let id = task.taskDescription.flatMap(UUID.init(uuidString:)) {
@@ -78,16 +80,21 @@ final class TrackWalkUploader: ObservableObject {
   }
 
   /// The owner's answer to "Upload now on cellular?". Switching to cellular
-  /// abandons any Wi-Fi task still waiting and starts again on the cellular session.
-  func choose(_ network: UploadNetwork, for id: UUID) {
+  /// abandons any Wi-Fi task still waiting (unless it is already running on Wi-Fi)
+  /// and starts again on the cellular session. Async so a lock-screen notification
+  /// action can hold the app awake until the choice has actually been acted on.
+  func choose(_ network: UploadNetwork, for id: UUID) async {
+    let background = UIApplication.shared.beginBackgroundTask(withName: "ScoutUploadChoice")
+    defer {
+      if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
+    }
     ScoutOutbox.shared.update(id) { $0.uploadNetwork = network }
     UploadPrompt.shared.withdraw(for: id)
-    Task {
-      if network == .cellularAllowed {
-        await cancelTasks(for: id, in: [wifiSession])
-      }
-      await advance(id)
+    await taskScan?.value
+    if network == .cellularAllowed && !onWiFi {
+      await cancelTasks(for: id, in: [wifiSession])
     }
+    await advance(id)
   }
 
   /// The owner's Delete: stops any upload, removes the local files, drops the capture.
@@ -154,17 +161,13 @@ final class TrackWalkUploader: ObservableObject {
       }
       return
     }
-    let session: URLSession
     switch UploadRules.route(for: capture, onWiFi: onWiFi, cellularAvailable: cellularAvailable) {
     case .wait:
       return
     case .askUser:
       UploadPrompt.shared.ask(for: capture, sizeBytes: Self.size(of: file))
-      session = wifiSession
-    case .wifiSession:
-      session = wifiSession
-    case .cellularSession:
-      session = cellularSession
+    case .wifiSession, .cellularSession:
+      break
     }
     working.insert(id)
     defer { working.remove(id) }
@@ -182,6 +185,19 @@ final class TrackWalkUploader: ObservableObject {
       step = .rejected("Video length unknown")
     }
 
+    // The wait above can be several seconds; re-read the capture and its route so a
+    // choice (or a delete) made while it was in flight still takes effect.
+    guard let freshCapture = ScoutOutbox.shared.capture(id) else { return }
+    let freshSession: URLSession
+    switch UploadRules.route(for: freshCapture, onWiFi: onWiFi, cellularAvailable: cellularAvailable) {
+    case .cellularSession:
+      freshSession = cellularSession
+    case .wait, .askUser, .wifiSession:
+      // `.wait` too: a token was already issued, so hold it on the Wi-Fi-only session
+      // rather than dropping it and waiting again.
+      freshSession = wifiSession
+    }
+
     switch step {
     case .upload(let mediaId, let putURL):
       ScoutOutbox.shared.update(id) { OutboxRules.beginUpload(&$0, mediaId: mediaId) }
@@ -189,12 +205,12 @@ final class TrackWalkUploader: ObservableObject {
       request.httpMethod = "PUT"
       request.setValue(MediaRequest.mimeType, forHTTPHeaderField: "Content-Type")
       request.setValue("true", forHTTPHeaderField: "x-upsert")
-      let task = session.uploadTask(with: request, fromFile: file)
+      let task = freshSession.uploadTask(with: request, fromFile: file)
       task.taskDescription = id.uuidString
-      liveTasks[id] = UploadSessionDelegate.key(session, task)
+      liveTasks[id] = UploadSessionDelegate.key(freshSession, task)
       progress[id] = 0
       task.resume()
-      NSLog("[Upload] %@ started on %@", id.uuidString, session.configuration.identifier ?? "?")
+      NSLog("[Upload] %@ started on %@", id.uuidString, freshSession.configuration.identifier ?? "?")
     case .complete(let mediaId):
       ScoutOutbox.shared.update(id) { OutboxRules.beginUpload(&$0, mediaId: mediaId) }
       await complete(id, mediaId: mediaId)

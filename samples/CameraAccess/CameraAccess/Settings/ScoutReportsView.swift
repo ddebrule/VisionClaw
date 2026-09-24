@@ -82,7 +82,7 @@ private struct ReportRow: View {
         }
         if canUploadOnCellular(capture) {
           Button("Upload now on cellular") {
-            uploader.choose(.cellularAllowed, for: capture.id)
+            Task { await uploader.choose(.cellularAllowed, for: capture.id) }
           }
         }
         if capture.state == .failed {
