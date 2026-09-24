@@ -43,7 +43,7 @@ class StreamSessionViewModel: ObservableObject {
   @Published var errorMessage: String = ""
   @Published var hasActiveDevice: Bool = false
   @Published var streamingMode: StreamingMode = .glasses
-  @Published var selectedResolution: StreamingResolution = .low
+  @Published var selectedResolution: StreamingResolution = .high
   @Published private(set) var isReconnectingGlasses = false
 
   var isStreaming: Bool {
@@ -221,11 +221,20 @@ class StreamSessionViewModel: ObservableObject {
     NSLog("[Stream] Resolution changed to %@", resolutionLabel)
   }
 
+  // 15 fps: Meta's docs say per-frame compression adapts to the Bluetooth
+  // budget, so asking for fewer frames leaves more bits per frame. That suits a
+  // vision model reading stills, and halves the decode work while locked.
+  private let requestedFrameRate: UInt = 15
+
   private func streamConfig() -> StreamConfiguration {
+    // HEVC rather than raw: raw 720x1280 is ~1.4 MB a frame, far more than the
+    // glasses link carries, so the SDK laddered down to a lower tier. HEVC is
+    // 10-30x smaller, so the top tier fits. Samples arrive compressed and are
+    // decoded in ingestGlassesSample.
     StreamConfiguration(
-      videoCodec: VideoCodec.raw,
+      videoCodec: VideoCodec.hvc1,
       resolution: selectedResolution,
-      frameRate: 24)
+      frameRate: requestedFrameRate)
   }
 
   func handleStartStreaming() async {
@@ -517,7 +526,7 @@ class StreamSessionViewModel: ObservableObject {
       frameWindowStart = now
       if let format = CMSampleBufferGetFormatDescription(sampleBuffer) {
         let size = CMVideoFormatDescriptionGetDimensions(format)
-        logEvent("first frame \(size.width)x\(size.height) (requested \(resolutionLabel))")
+        logEvent("first frame \(size.width)x\(size.height) (requested \(resolutionLabel) @ \(requestedFrameRate) fps, HEVC)")
       }
     }
     deliveredFrames += 1
