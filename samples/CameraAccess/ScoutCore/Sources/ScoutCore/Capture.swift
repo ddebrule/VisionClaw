@@ -7,8 +7,10 @@ public enum CaptureMode: String, Codable, Sendable {
 }
 
 /// Where a capture is in its trip to SPECTRE. Race: reportPending → done.
-/// Track Walk (Plan 6/7) continues from reported to its video upload.
+/// Track Walk: recording → recorded → reportPending → reported (Plan 7 continues to the video upload).
 public enum CaptureState: String, Codable, Sendable {
+  case recording
+  case recorded
   case reportPending
   case reported
   case done
@@ -32,16 +34,22 @@ public struct Capture: Codable, Equatable, Identifiable, Sendable {
   public let mode: CaptureMode
   public let sessionId: String
   public let trackName: String
-  public let transcript: [TranscriptLine]
+  public var transcript: [TranscriptLine]
   public let scoutContext: String
   public let vehicleModel: String
-  public let durationMin: Int
+  public var durationMin: Int
   public let createdAt: Date
   public var state: CaptureState
   public var attempts: Int
   public var lastError: String?
   /// False after SPECTRE refused the report outright; only a manual Retry sends it again.
   public var retryable: Bool
+  /// Track Walk: the recording's file name inside Application Support/TrackWalks.
+  public var videoFileName: String?
+  /// Track Walk: true when no speech was recognised (SPECTRE then skips layout extraction).
+  public var noNarration: Bool?
+  /// Track Walk: already saved to the Photos library.
+  public var savedToPhotos: Bool?
 
   public init(
     id: UUID = UUID(),
@@ -52,7 +60,9 @@ public struct Capture: Codable, Equatable, Identifiable, Sendable {
     scoutContext: String,
     vehicleModel: String,
     durationMin: Int,
-    createdAt: Date = Date()
+    createdAt: Date = Date(),
+    state: CaptureState = .reportPending,
+    videoFileName: String? = nil
   ) {
     self.id = id
     self.mode = mode
@@ -63,10 +73,13 @@ public struct Capture: Codable, Equatable, Identifiable, Sendable {
     self.vehicleModel = vehicleModel
     self.durationMin = durationMin
     self.createdAt = createdAt
-    self.state = .reportPending
+    self.state = state
     self.attempts = 0
     self.lastError = nil
     self.retryable = true
+    self.videoFileName = videoFileName
+    self.noNarration = nil
+    self.savedToPhotos = nil
   }
 }
 
@@ -81,12 +94,35 @@ public enum ReportOutcome: Equatable, Sendable {
 
 /// Pure state rules for the Outbox. Every step is safe to repeat.
 public enum OutboxRules {
-  public static func needsSend(_ capture: Capture) -> Bool {
+  public static let silentWalkLine = "(Silent walk — no narration recorded.)"
+
+  public static func needsSend(_ capture: Capture, trackWalkReportsEnabled: Bool = true) -> Bool {
+    if capture.mode == .trackWalk && !trackWalkReportsEnabled { return false }
     switch capture.state {
     case .reportPending: return true
     case .failed: return capture.retryable
-    case .reported, .done: return false
+    case .recording, .recorded, .reported, .done: return false
     }
+  }
+
+  /// A Track Walk's recording is finalized (the file exists as .mp4, or was lost).
+  public static func markRecorded(_ capture: inout Capture, videoFileName: String?, savedToPhotos: Bool) {
+    capture.videoFileName = videoFileName
+    capture.savedToPhotos = savedToPhotos
+    capture.state = .recorded
+  }
+
+  /// Transcription done: the report is ready. Blank lines are dropped; no speech
+  /// at all becomes a single placeholder line with noNarration set.
+  public static func markTranscribed(_ capture: inout Capture, lines: [String]) {
+    let spoken = lines
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty }
+    capture.noNarration = spoken.isEmpty
+    capture.transcript = spoken.isEmpty
+      ? [TranscriptLine(role: "user", text: silentWalkLine)]
+      : spoken.map { TranscriptLine(role: "user", text: $0) }
+    capture.state = .reportPending
   }
 
   public static func beginSend(_ capture: inout Capture) {
