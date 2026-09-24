@@ -14,6 +14,9 @@ struct StreamView: View {
   @ObservedObject var wearablesVM: WearablesViewModel
   @ObservedObject var geminiVM: GeminiSessionViewModel
   @ObservedObject var webrtcVM: WebRTCSessionViewModel
+  // A nested ObservableObject's changes don't propagate through viewModel, so
+  // StreamView observes the controller directly.
+  @ObservedObject private var walk: TrackWalkController
 
   // Glasses-problem announcements wait until the problem has lasted a moment,
   // so a brief Bluetooth gap is not read out; "back" follows only an announced problem.
@@ -23,6 +26,19 @@ struct StreamView: View {
   // minutes); only announce one that is still going after a few seconds.
   @State private var pendingScoutAnnouncement: Task<Void, Never>?
   @State private var announcedScoutReconnect = false
+
+  init(
+    viewModel: StreamSessionViewModel,
+    wearablesVM: WearablesViewModel,
+    geminiVM: GeminiSessionViewModel,
+    webrtcVM: WebRTCSessionViewModel
+  ) {
+    self._viewModel = ObservedObject(wrappedValue: viewModel)
+    self._wearablesVM = ObservedObject(wrappedValue: wearablesVM)
+    self._geminiVM = ObservedObject(wrappedValue: geminiVM)
+    self._webrtcVM = ObservedObject(wrappedValue: webrtcVM)
+    self._walk = ObservedObject(wrappedValue: viewModel.trackWalk)
+  }
 
   var body: some View {
     ZStack {
@@ -114,6 +130,15 @@ struct StreamView: View {
         .padding(.all, 24)
       }
 
+      if walk.isActive {
+        VStack {
+          TrackWalkBar(walk: walk)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+          Spacer()
+        }
+      }
+
       if webrtcVM.isActive {
         VStack {
           WebRTCStatusBar(webrtcVM: webrtcVM)
@@ -130,7 +155,7 @@ struct StreamView: View {
 
       VStack {
         Spacer()
-        ControlsView(viewModel: viewModel, geminiVM: geminiVM, webrtcVM: webrtcVM)
+        ControlsView(viewModel: viewModel, geminiVM: geminiVM, webrtcVM: webrtcVM, walk: walk)
       }
       .padding(.all, 24)
     }
@@ -138,6 +163,7 @@ struct StreamView: View {
       pendingGlassesAnnouncement?.cancel()
       pendingScoutAnnouncement?.cancel()
       Task {
+        if viewModel.trackWalk.isActive { await viewModel.trackWalk.finish(reason: .leftScreen) }
         if viewModel.streamingStatus != .stopped { await viewModel.stopSession() }
         // Leaving the stream mid-Race sends what was captured instead of dropping it.
         if geminiVM.isGeminiActive || geminiVM.hasUnsentReport { await geminiVM.endScout() }
@@ -207,6 +233,14 @@ struct StreamView: View {
     } message: {
       Text(webrtcVM.errorMessage ?? "")
     }
+    .alert("Track Walk", isPresented: Binding(
+      get: { walk.errorMessage != nil },
+      set: { if !$0 { walk.errorMessage = nil } }
+    )) {
+      Button("OK") { walk.errorMessage = nil }
+    } message: {
+      Text(walk.errorMessage ?? "")
+    }
   }
 }
 
@@ -214,7 +248,9 @@ struct ControlsView: View {
   @ObservedObject var viewModel: StreamSessionViewModel
   @ObservedObject var geminiVM: GeminiSessionViewModel
   @ObservedObject var webrtcVM: WebRTCSessionViewModel
+  @ObservedObject var walk: TrackWalkController
   @State private var showEndScoutConfirm = false
+  @State private var showWalkPicker = false
 
   var body: some View {
     HStack(spacing: 8) {
@@ -237,9 +273,27 @@ struct ControlsView: View {
           if !geminiVM.isGeminiActive { await geminiVM.startSession() }
         }
       }
-      .opacity(webrtcVM.isActive ? 0.4 : 1.0)
-      .disabled(webrtcVM.isActive || geminiVM.isGeminiActive)
+      .opacity(webrtcVM.isActive || walk.isActive ? 0.4 : 1.0)
+      .disabled(webrtcVM.isActive || geminiVM.isGeminiActive || walk.isActive)
       .accessibilityHint(geminiVM.isGeminiActive ? "Race is running. Use End to finish." : "Starts a Race with Scout")
+
+      CircleButton(icon: "figure.walk", text: "Walk") {
+        showWalkPicker = true
+      }
+      .opacity(geminiVM.isGeminiActive || webrtcVM.isActive || walk.isActive ? 0.4 : 1.0)
+      .disabled(geminiVM.isGeminiActive || webrtcVM.isActive || walk.isActive)
+      .accessibilityHint("Records a Track Walk video with your narration")
+      .sheet(isPresented: $showWalkPicker) {
+        TrackWalkPickerSheet { session in
+          Task {
+            await viewModel.trackWalk.begin(
+              session: session,
+              subscribeFrames: { viewModel.subscribeFrames($0) },
+              unsubscribeFrames: { viewModel.unsubscribeFrames($0) },
+              glassesSource: viewModel.streamingMode == .glasses)
+          }
+        }
+      }
 
       if geminiVM.isGeminiActive || geminiVM.hasUnsentReport {
         CircleButton(
@@ -278,8 +332,8 @@ struct ControlsView: View {
           else { await webrtcVM.startSession() }
         }
       }
-      .opacity(geminiVM.isGeminiActive ? 0.4 : 1.0)
-      .disabled(geminiVM.isGeminiActive)
+      .opacity(geminiVM.isGeminiActive || walk.isActive ? 0.4 : 1.0)
+      .disabled(geminiVM.isGeminiActive || walk.isActive)
     }
   }
 }
