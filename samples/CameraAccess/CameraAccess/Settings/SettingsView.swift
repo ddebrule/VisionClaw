@@ -37,6 +37,12 @@ struct SettingsView: View {
           Toggle("Scout test mode (no SPECTRE)", isOn: $scoutTestMode)
         }
 
+        Section(header: Text("Diagnostics"), footer: Text("Glasses connection events from this app run. Share them when reporting a glasses problem.")) {
+          NavigationLink("Glasses event log") {
+            GlassesEventLogView()
+          }
+        }
+
         Section(header: Text("WebRTC")) {
           VStack(alignment: .leading, spacing: 4) {
             Text("Signaling URL")
