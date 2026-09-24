@@ -228,7 +228,6 @@ class StreamSessionViewModel: ObservableObject {
       try session.start()
     } catch {
       logEvent("session start failed: \(String(describing: error))")
-      deviceSession = nil
       handleGlassesDrop(reason: "session start failed")
       if !keepGlassesAlive {
         showError("Couldn't reach the glasses. Make sure they're on, unfolded and connected.")
@@ -279,7 +278,10 @@ class StreamSessionViewModel: ObservableObject {
       // Meta's ordering rule: route the glasses mic and let it settle before
       // the camera stream starts, or audio can fail over to the phone.
       Task { @MainActor [weak self] in
-        if GlassesAudioRoute.selectGlassesMicIfNeeded() {
+        // Only while Scout audio is up and the owner hasn't asked for the phone speaker.
+        if self?.geminiSessionVM?.isGeminiActive == true,
+           !SettingsManager.shared.speakerOutputEnabled,
+           GlassesAudioRoute.selectGlassesMicIfNeeded() {
           self?.logEvent("glasses mic selected; letting the route settle")
           try? await Task.sleep(for: GlassesAudioRoute.settleDelay)
         }

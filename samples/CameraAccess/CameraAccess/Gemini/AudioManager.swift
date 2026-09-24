@@ -36,6 +36,7 @@ class AudioManager {
   private var routeChangeObserver: NSObjectProtocol?
   private var mediaServicesResetObserver: NSObjectProtocol?
   private var foregroundObserver: NSObjectProtocol?
+  private var engineConfigObserver: NSObjectProtocol?
 
   init() {
     self.outputFormat = AVAudioFormat(
@@ -78,6 +79,9 @@ class AudioManager {
     }
     NSLog("[Audio] Session mode: %@", useIPhoneMode ? "voiceChat (iPhone)" : "videoChat (glasses)")
 
+    // Resets call this again, so registration must stay idempotent: drop any
+    // observers from a previous setup before adding a fresh set.
+    removeObservers()
     setupInterruptionHandling()
     setupAppLifecycleObservers()
   }
@@ -275,6 +279,19 @@ class AudioManager {
     ) { [weak self] _ in
       self?.attemptAudioReset()
     }
+
+    // The engine stops itself when the hardware format changes (for example
+    // when the input swaps back to the glasses' HFP mic). With the phone
+    // locked nothing else restarts it, so reset here.
+    engineConfigObserver = NotificationCenter.default.addObserver(
+      forName: .AVAudioEngineConfigurationChange,
+      object: audioEngine,
+      queue: .main
+    ) { [weak self] _ in
+      guard let self, self.isCapturing, !self.audioEngine.isRunning else { return }
+      NSLog("[Audio] Engine configuration changed while capturing, resetting")
+      self.attemptAudioReset()
+    }
   }
 
   private func setupAppLifecycleObservers() {
@@ -383,6 +400,10 @@ class AudioManager {
     if let observer = foregroundObserver {
       NotificationCenter.default.removeObserver(observer)
       foregroundObserver = nil
+    }
+    if let observer = engineConfigObserver {
+      NotificationCenter.default.removeObserver(observer)
+      engineConfigObserver = nil
     }
   }
 
