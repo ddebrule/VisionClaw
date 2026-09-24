@@ -8,8 +8,8 @@
 
 ## 0. Open questions for the owner
 
-1. **Race ending is phone-only (§B2).** The glasses cannot tell the app that a tap-and-hold happened (§A2). Confirm this is acceptable.
-2. **iPhone iOS version.** If the owner's phone is on iOS 26 or later, raise the minimum to iOS 26 and drop the `SFSpeechRecognizer` fallback (§B4). Until answered, keep the fallback.
+1. *(Resolved 2026-09-23: the owner asked to end from the glasses. Race ends by folding the glasses; see §B2.)*
+2. *(Resolved 2026-09-23: the owner's phone runs iOS 27. The minimum deployment target is raised to **iOS 26.0** in Stage 1, and transcription uses `SpeechAnalyzer` only, with no `SFSpeechRecognizer` fallback.)*
 
 ## 1. Summary
 
@@ -67,6 +67,8 @@ Each stage is its own TestFlight build. The owner runs that stage's device check
 | Throttle preview image creation | `6d02f6a` (preview hunk only, per the hunk map) | We build a UIImage on the main thread at 24 fps. Upstream saw freezes and watchdog kills from the same thing. |
 | Keep the mic muted until playback has actually finished | `1a293fd` (mute part) | Stops Gemini hearing the tail of its own reply. |
 | Faster end-of-speech detection | `671f282` | High end-of-speech sensitivity, 400 ms silence. Needs a trackside noise check. |
+| **Gemini session resumption** (moved here from §B3) | none (ours) | Google closes every Live connection after about 10 minutes with a `goAway` message. Today `goAway` ends the session (`GeminiLiveService.swift:218-225`), so a Race started in the pits dies after about 10 minutes. Enable `sessionResumption`, then reconnect with the latest handle on `goAway` or an unexpected close, with backoff. Handles stay valid for 2 hours. End stays available while there is an unsent transcript. |
+| Minimum iOS 17.0 → **26.0** | none (ours) | The owner runs iOS 27. This also covers the 17.2 floor that DAT 0.9 needs. Set in every app/test target in `project.pbxproj`. |
 | Split `SpectreScoutBridge` into its own file | none (ours) | It currently shares `GeminiSessionViewModel.swift` (lines 1–87). This is a pure move, which prepares for §B2/§B3/§B5. |
 
 **Device checklist:**
@@ -171,12 +173,19 @@ Each stage is its own TestFlight build. The owner runs that stage's device check
 2. **One opening question.** "Which vehicle — [list]?", answered with "Locked in, <vehicle>. Go ahead." Remove the context question from `GeminiConfig.defaultSystemInstruction`.
 3. **The vehicle is sent as `vehicle_model`**, extracted from the conversation as today. SPECTRE already fuzzy-matches it server-side (`route.ts:91-104`). No client-side matching.
 4. `scout_context = "Driver Stand"`. This replaces keyword guessing for context.
-5. **Ending:** tap **End** on the phone (open question 0.1). The glasses cannot signal "end" (§A2). A stream stop in Race triggers a reconnect, never an end.
+5. **Ending:**
+   - **Fold the glasses** (`hingesClosed`, which 0.4 already exposes: `StreamSessionViewModel.swift:359`).
+     - The phone says "Ending Scout in 10 seconds, unfold to cancel". Unfolding within 10 s cancels.
+     - After 10 s still folded, the report is sent and the phone says "Report sent to Setup_IQ".
+     - The prompt plays through the phone, because folded glasses may drop audio.
+   - **Or tap End** on the phone.
+   - **The capture button** is added only if the §A2 gate shows the app can see it.
+   - **A bare stream stop** (no `hingesClosed`) triggers a reconnect, never an end.
 
 ## B3. Race mode resilience
 
 - **Glasses drop:** reconnect per §A2.
-- **Gemini socket drops or hits its session limit:** reconnect using the Live API's session-resumption handle, if Stage 1 confirmed it; otherwise use a fresh connection with the transcript so far re-sent as context.
+- **Gemini socket drops or hits its session limit:** handled by Stage 1's session resumption (§A1).
 - **The transcript survives:**
   - Today, the End button hides when `isGeminiActive` goes false (`StreamView.swift:156`).
   - `scoutHistory` is wiped by the next `startSession()` (`GeminiSessionViewModel.swift:165`).
@@ -241,7 +250,7 @@ The Outbox advances the Capture record (§B5):
 
 1. **Finalize:** remux to `.mp4`.
 2. **Save to Photos** if the switch is on. Uses add-only permission.
-3. **Transcribe on the device:** `SpeechAnalyzer` on iOS 26 or later, otherwise `SFSpeechRecognizer` with `requiresOnDeviceRecognition` (open question 0.2). Transcript entries are sent as `role: "user"`.
+3. **Transcribe on the device** with `SpeechAnalyzer` (the minimum iOS is 26). Transcript entries are sent as `role: "user"`.
 4. **Text report:** `POST /api/scout` with `scout_context = "Track Walk"`, the session, `duration_min`, and the capture's `capture_id`.
    - **Silent walk** (no speech recognized): send `no_narration: true` with a single placeholder entry. SPECTRE skips the layout extraction, so it doesn't overwrite earlier notes (§B6).
 5. **Upload the video** (§B5).
