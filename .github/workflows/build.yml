@@ -18,6 +18,9 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s $(find /Applications -name 'Xcode*.app' -maxdepth 1 | sort -V | tail -1)
 
+      - name: Test ScoutCore
+        run: swift test --package-path samples/CameraAccess/ScoutCore
+
       - name: Install iOS platform
         run: xcodebuild -downloadPlatform iOS
 
