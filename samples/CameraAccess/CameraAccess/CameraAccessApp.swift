@@ -32,6 +32,7 @@ struct CameraAccessApp: App {
   private let wearables: WearablesInterface
   @StateObject private var wearablesViewModel: WearablesViewModel
   @Environment(\.scenePhase) private var scenePhase
+  @UIApplicationDelegateAdaptor(ScoutAppDelegate.self) private var appDelegate
 
   init() {
     do {
@@ -59,6 +60,7 @@ struct CameraAccessApp: App {
           if phase == .active {
             ScoutOutbox.shared.resume()
             TrackWalkFinisher.shared.resumeAll()
+            TrackWalkUploader.shared.resumeAll()
           }
         }
         // Show error alerts for view model failures

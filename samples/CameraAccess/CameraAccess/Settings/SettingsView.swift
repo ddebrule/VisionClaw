@@ -134,6 +134,8 @@ struct SettingsView: View {
     settings.trackWalkReportsEnabled = trackWalkReportsEnabled
     if trackWalkReportsEnabled {
       ScoutOutbox.shared.resume()
+      UploadPrompt.shared.requestPermission()
+      TrackWalkUploader.shared.resumeAll()
     }
   }
 }
