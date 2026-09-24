@@ -16,6 +16,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 enum A11y {
   /// Announces a status change. Use `assertive` for states that should

@@ -575,7 +575,8 @@ class StreamSessionViewModel: ObservableObject {
     statusTicker?.cancel()
     statusTicker = Task { @MainActor [weak self] in
       while !Task.isCancelled {
-        self?.refreshGlassesStatus()
+        guard let self else { return }
+        self.refreshGlassesStatus()
         try? await Task.sleep(for: .milliseconds(500))
       }
     }

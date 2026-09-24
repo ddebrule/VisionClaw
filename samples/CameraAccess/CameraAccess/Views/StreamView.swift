@@ -15,6 +15,15 @@ struct StreamView: View {
   @ObservedObject var geminiVM: GeminiSessionViewModel
   @ObservedObject var webrtcVM: WebRTCSessionViewModel
 
+  // Glasses-problem announcements wait until the problem has lasted a moment,
+  // so a brief Bluetooth gap is not read out; "back" follows only an announced problem.
+  @State private var pendingGlassesAnnouncement: Task<Void, Never>?
+  @State private var announcedGlassesProblem = false
+  // Scout reconnects happen routinely (the server hands over about every 10
+  // minutes); only announce one that is still going after a few seconds.
+  @State private var pendingScoutAnnouncement: Task<Void, Never>?
+  @State private var announcedScoutReconnect = false
+
   var body: some View {
     ZStack {
       Color.black.edgesIgnoringSafeArea(.all)
@@ -126,21 +135,33 @@ struct StreamView: View {
       .padding(.all, 24)
     }
     .onDisappear {
+      pendingGlassesAnnouncement?.cancel()
+      pendingScoutAnnouncement?.cancel()
       Task {
         if viewModel.streamingStatus != .stopped { await viewModel.stopSession() }
         if geminiVM.isGeminiActive { geminiVM.stopSession() }
         if webrtcVM.isActive { webrtcVM.stopSession() }
       }
     }
-    .onChange(of: viewModel.glassesStatus) { oldStatus, newStatus in
+    .onChange(of: viewModel.glassesStatus) { _, newStatus in
       guard viewModel.streamingMode == .glasses else { return }
+      pendingGlassesAnnouncement?.cancel()
+      pendingGlassesAnnouncement = nil
       switch newStatus {
       case .putThemOn, .folded:
-        let caption = GlassesStatusText.caption(for: newStatus) ?? ""
-        A11y.announce("\(GlassesStatusText.title(for: newStatus)). \(caption)", assertive: true)
-      case .live where oldStatus == .putThemOn || oldStatus == .folded:
-        A11y.announce("Glasses video is back")
-      default:
+        pendingGlassesAnnouncement = Task { @MainActor in
+          try? await Task.sleep(for: .seconds(3))
+          guard !Task.isCancelled, viewModel.glassesStatus == newStatus else { return }
+          let caption = GlassesStatusText.caption(for: newStatus) ?? ""
+          A11y.announce("\(GlassesStatusText.title(for: newStatus)). \(caption)", assertive: true)
+          announcedGlassesProblem = true
+        }
+      case .live:
+        if announcedGlassesProblem {
+          announcedGlassesProblem = false
+          A11y.announce("Glasses video is back")
+        }
+      case .connecting:
         break
       }
     }
@@ -148,8 +169,20 @@ struct StreamView: View {
       A11y.announce(isActive ? "Scout started" : "Scout ended")
     }
     .onChange(of: geminiVM.isReconnecting) { _, isReconnecting in
+      pendingScoutAnnouncement?.cancel()
+      pendingScoutAnnouncement = nil
       if isReconnecting {
-        A11y.announce("Scout connection lost. Reconnecting.", assertive: true)
+        pendingScoutAnnouncement = Task { @MainActor in
+          try? await Task.sleep(for: .seconds(5))
+          guard !Task.isCancelled, geminiVM.isReconnecting else { return }
+          A11y.announce("Scout connection lost. Reconnecting.", assertive: true)
+          announcedScoutReconnect = true
+        }
+      } else if announcedScoutReconnect {
+        announcedScoutReconnect = false
+        if geminiVM.isGeminiActive {
+          A11y.announce("Scout reconnected")
+        }
       }
     }
     .sheet(isPresented: $viewModel.showPhotoPreview) {
