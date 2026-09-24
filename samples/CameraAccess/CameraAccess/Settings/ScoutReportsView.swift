@@ -20,7 +20,7 @@ struct ScoutReportsView: View {
               .font(.subheadline)
               .foregroundStyle(capture.state == .failed ? .red : .secondary)
           }
-          Text("\(capture.vehicleModel) · \(capture.durationMin) min · \(capture.createdAt.formatted(date: .abbreviated, time: .shortened))")
+          Text("\(capture.vehicleModel.isEmpty ? "Track Walk" : capture.vehicleModel) · \(capture.durationMin) min · \(capture.createdAt.formatted(date: .abbreviated, time: .shortened))")
             .font(.caption)
             .foregroundStyle(.secondary)
           if let error = capture.lastError {
@@ -43,8 +43,15 @@ struct ScoutReportsView: View {
 
   private static func stateLabel(_ capture: Capture) -> String {
     switch capture.state {
-    case .reportPending: return "Sending…"
-    case .reported, .done: return "Sent"
+    case .recording: return "Recording…"
+    case .recorded: return "Processing…"
+    case .reportPending:
+      if capture.mode == .trackWalk && !SettingsManager.shared.trackWalkReportsEnabled {
+        return "Held"
+      }
+      return "Sending…"
+    case .reported: return capture.mode == .trackWalk ? "Report sent · video waiting" : "Sent"
+    case .done: return "Sent"
     case .failed: return capture.retryable ? "Waiting for signal" : "Failed"
     }
   }

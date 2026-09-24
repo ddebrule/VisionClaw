@@ -54,9 +54,29 @@ final class ScoutOutbox: ObservableObject {
   }
 
   /// Retries anything waiting, when the app comes back to the foreground.
+  /// Also call this right after Settings turns Track Walk reports on, so held
+  /// reports do not wait for the next foreground or network event.
   func resume() {
     guard started else { return }
     reconcile()
+  }
+
+  /// Saves a capture without sending it (a Track Walk starting to record).
+  func add(_ capture: Capture) {
+    captures.append(capture)
+    save()
+  }
+
+  func capture(_ id: UUID) -> Capture? {
+    captures.first { $0.id == id }
+  }
+
+  /// Changes one capture and saves before returning, so the change is on disk
+  /// before whatever step it unlocks.
+  func update(_ id: UUID, _ change: (inout Capture) -> Void) {
+    guard let index = captures.firstIndex(where: { $0.id == id }) else { return }
+    change(&captures[index])
+    save()
   }
 
   func retry(_ id: UUID) {
@@ -67,7 +87,7 @@ final class ScoutOutbox: ObservableObject {
   }
 
   private func reconcile() {
-    for capture in captures where OutboxRules.needsSend(capture) && !inFlight.contains(capture.id) {
+    for capture in captures where OutboxRules.needsSend(capture, trackWalkReportsEnabled: SettingsManager.shared.trackWalkReportsEnabled) && !inFlight.contains(capture.id) {
       Task { await send(capture.id) }
     }
   }
@@ -75,7 +95,7 @@ final class ScoutOutbox: ObservableObject {
   private func send(_ id: UUID) async {
     guard !inFlight.contains(id),
           let index = captures.firstIndex(where: { $0.id == id }),
-          OutboxRules.needsSend(captures[index])
+          OutboxRules.needsSend(captures[index], trackWalkReportsEnabled: SettingsManager.shared.trackWalkReportsEnabled)
     else { return }
     inFlight.insert(id)
     // A report send must finish even if the phone locks right after End.

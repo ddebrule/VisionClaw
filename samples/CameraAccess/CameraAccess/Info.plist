@@ -75,9 +75,11 @@
 	<key>NSCameraUsageDescription</key>
 	<string>This app uses the camera for iPhone testing mode, allowing you to test the AI assistant pipeline without glasses.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>This app uses the microphone to have voice conversations with the AI assistant while streaming from your glasses.</string>
+	<string>The microphone carries your voice to Scout during a Race and records your narration during a Track Walk.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>This app needs access to save photos captured from your glasses.</string>
+	<string>Saves photos from your glasses and Track Walk videos to your library.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Track Walk turns your narration into text on this iPhone for your SPECTRE report.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

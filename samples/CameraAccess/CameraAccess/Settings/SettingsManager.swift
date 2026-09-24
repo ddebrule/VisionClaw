@@ -12,6 +12,8 @@ final class SettingsManager {
     case speakerOutputEnabled
     case videoStreamingEnabled
     case scoutTestMode
+    case trackWalkSaveToPhotos
+    case trackWalkReportsEnabled
   }
 
   private init() {}
@@ -56,11 +58,26 @@ final class SettingsManager {
     set { defaults.set(newValue, forKey: Key.scoutTestMode.rawValue) }
   }
 
+  // MARK: - Track Walk
+
+  var trackWalkSaveToPhotos: Bool {
+    get { defaults.object(forKey: Key.trackWalkSaveToPhotos.rawValue) as? Bool ?? true }
+    set { defaults.set(newValue, forKey: Key.trackWalkSaveToPhotos.rawValue) }
+  }
+
+  /// Off until SPECTRE handles Track Walk reports (no_narration, no vehicle);
+  /// until then walks are recorded and their reports wait in the Outbox.
+  var trackWalkReportsEnabled: Bool {
+    get { defaults.bool(forKey: Key.trackWalkReportsEnabled.rawValue) }
+    set { defaults.set(newValue, forKey: Key.trackWalkReportsEnabled.rawValue) }
+  }
+
   // MARK: - Reset
 
   func resetAll() {
     for key in [Key.geminiAPIKey, .geminiSystemPrompt, .webrtcSignalingURL,
-                .speakerOutputEnabled, .videoStreamingEnabled, .scoutTestMode] {
+                .speakerOutputEnabled, .videoStreamingEnabled, .scoutTestMode,
+                .trackWalkSaveToPhotos, .trackWalkReportsEnabled] {
       defaults.removeObject(forKey: key.rawValue)
     }
   }

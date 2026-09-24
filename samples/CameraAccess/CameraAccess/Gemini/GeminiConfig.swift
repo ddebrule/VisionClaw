@@ -86,6 +86,7 @@ enum GeminiConfig {
     let base = spectreScoutURL
     return base.hasSuffix("/active-session") ? base : base + "/active-session"
   }
+  static var spectreSessionsURL: String { spectreScoutURL + "/sessions" }
   static var spectreUserToken: String { Secrets.spectreUserToken.trimmingCharacters(in: .whitespacesAndNewlines) }
 
   // User-configurable values

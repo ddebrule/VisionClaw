@@ -10,6 +10,8 @@ struct SettingsView: View {
   @State private var speakerOutputEnabled: Bool = false
   @State private var videoStreamingEnabled: Bool = true
   @State private var scoutTestMode: Bool = false
+  @State private var trackWalkSaveToPhotos: Bool = true
+  @State private var trackWalkReportsEnabled: Bool = false
   @State private var showResetConfirmation = false
 
   var body: some View {
@@ -35,6 +37,11 @@ struct SettingsView: View {
 
         Section(header: Text("Scout"), footer: Text("Runs Scout without an active SPECTRE session. Reports are not sent.")) {
           Toggle("Scout test mode (no SPECTRE)", isOn: $scoutTestMode)
+        }
+
+        Section(header: Text("Track Walk"), footer: Text("Reports wait in Settings → Scout reports until sending is on. Turn it on once SPECTRE supports Track Walk reports.")) {
+          Toggle("Save walk videos to Photos", isOn: $trackWalkSaveToPhotos)
+          Toggle("Send Track Walk reports", isOn: $trackWalkReportsEnabled)
         }
 
         Section(header: Text("Diagnostics"), footer: Text("Glasses connection events from this app run. Share them when reporting a glasses problem.")) {
@@ -112,6 +119,8 @@ struct SettingsView: View {
     speakerOutputEnabled = settings.speakerOutputEnabled
     videoStreamingEnabled = settings.videoStreamingEnabled
     scoutTestMode = settings.scoutTestMode
+    trackWalkSaveToPhotos = settings.trackWalkSaveToPhotos
+    trackWalkReportsEnabled = settings.trackWalkReportsEnabled
   }
 
   private func save() {
@@ -121,5 +130,10 @@ struct SettingsView: View {
     settings.speakerOutputEnabled = speakerOutputEnabled
     settings.videoStreamingEnabled = videoStreamingEnabled
     settings.scoutTestMode = scoutTestMode
+    settings.trackWalkSaveToPhotos = trackWalkSaveToPhotos
+    settings.trackWalkReportsEnabled = trackWalkReportsEnabled
+    if trackWalkReportsEnabled {
+      ScoutOutbox.shared.resume()
+    }
   }
 }

@@ -336,10 +336,14 @@ class GeminiSessionViewModel: ObservableObject {
         case .end:
           NSLog("[ScoutVM] Idle 45 min: ending the Race")
           let result = await self.endScout()
-          SpokenCues.shared.speak(
-            result == .sent ? "Race ended after 45 quiet minutes. Report sent to Setup_IQ."
-                            : "Race ended after 45 quiet minutes. Report saved.",
-            onPhoneSpeaker: true)
+          let message: String
+          switch result {
+          case .sent: message = "Race ended after 45 quiet minutes. Report sent to Setup_IQ."
+          case .queued: message = "Race ended after 45 quiet minutes. Report saved."
+          case .nothingToSend: message = "Race ended after 45 quiet minutes."
+          case .testMode: message = "Race ended after 45 quiet minutes. Test mode, report not sent."
+          }
+          SpokenCues.shared.speak(message, onPhoneSpeaker: true)
           return
         }
       }
@@ -397,10 +401,14 @@ class GeminiSessionViewModel: ObservableObject {
       // Gemini is gone for good: save the transcript to the Outbox now rather
       // than leaving it in memory, where a pocketed phone could lose it.
       let result = await self.endScout()
-      SpokenCues.shared.speak(
-        result == .sent ? "Scout connection lost. Report sent to Setup_IQ."
-                        : "Scout connection lost. Report saved.",
-        onPhoneSpeaker: true)
+      let message: String
+      switch result {
+      case .sent: message = "Scout connection lost. Report sent to Setup_IQ."
+      case .queued: message = "Scout connection lost. Report saved."
+      case .nothingToSend: message = "Scout connection lost. Race ended."
+      case .testMode: message = "Scout connection lost. Test mode, report not sent."
+      }
+      SpokenCues.shared.speak(message, onPhoneSpeaker: true)
       if self.errorMessage == nil {
         self.errorMessage = "Connection lost (\(reason)). The report was handed to the Outbox — see Settings → Scout reports."
       }

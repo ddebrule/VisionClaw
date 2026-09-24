@@ -13,6 +13,14 @@ struct ActiveSessionInfo {
   let vehicles: [String]  // vehicle model names
 }
 
+/// One session in the Track Walk picker (SPECTRE `GET /api/scout/sessions`).
+struct ScoutSessionSummary: Identifiable, Equatable {
+  let id: String
+  let track: String
+  let status: String
+  let scheduledDate: String?
+}
+
 // MARK: - SpectreScoutBridge
 
 @MainActor
@@ -52,6 +60,38 @@ class SpectreScoutBridge {
     return ActiveSessionInfo(sessionId: sessionId, track: track, vehicles: vehicleModels)
   }
 
+  /// Planned and active sessions for the Track Walk picker, active first.
+  /// Falls back to the active session alone while SPECTRE lacks the list route.
+  func fetchSessions() async throws -> [ScoutSessionSummary] {
+    guard let url = URL(string: GeminiConfig.spectreSessionsURL) else { throw URLError(.badURL) }
+    var request = URLRequest(url: url)
+    request.httpMethod = "GET"
+    request.setValue(GeminiConfig.spectreUserToken, forHTTPHeaderField: "X-Scout-Token")
+    let (data, response) = try await session.data(for: request, delegate: RedirectRefuser())
+    guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+    if http.statusCode == 404 || (300...399).contains(http.statusCode) {
+      // Older SPECTRE: no list route yet. Offer the active session if there is one.
+      do {
+        let active = try await fetchActiveSession()
+        return [ScoutSessionSummary(id: active.sessionId, track: active.track, status: "active", scheduledDate: nil)]
+      } catch {
+        return []
+      }
+    }
+    guard (200...299).contains(http.statusCode),
+          let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let rows = json["sessions"] as? [[String: Any]]
+    else { throw URLError(.cannotParseResponse) }
+    return rows.compactMap { row in
+      guard let id = row["session_id"] as? String else { return nil }
+      return ScoutSessionSummary(
+        id: id,
+        track: row["track"] as? String ?? "Session",
+        status: row["status"] as? String ?? "planned",
+        scheduledDate: row["scheduled_date"] as? String)
+    }
+  }
+
   /// Posts one capture's report. Never throws: the Outbox needs to know whether
   /// to retry, not why a Swift error surfaced.
   func deliver(_ capture: Capture) async -> ReportOutcome {
@@ -63,14 +103,18 @@ class SpectreScoutBridge {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue(GeminiConfig.spectreUserToken, forHTTPHeaderField: "X-Scout-Token")
 
-    let body: [String: Any] = [
+    var body: [String: Any] = [
       "capture_id": capture.id.uuidString.lowercased(),
       "session_id": capture.sessionId,
       "transcript": capture.transcript.map { ["role": $0.role, "text": $0.text] },
       "duration_min": capture.durationMin,
       "scout_context": capture.scoutContext,
-      "vehicle_model": capture.vehicleModel,
     ]
+    if capture.mode == .trackWalk {
+      body["no_narration"] = capture.noNarration ?? false
+    } else {
+      body["vehicle_model"] = capture.vehicleModel
+    }
     do {
       request.httpBody = try JSONSerialization.data(withJSONObject: body)
       let (data, response) = try await session.data(for: request, delegate: RedirectRefuser())
