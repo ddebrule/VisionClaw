@@ -146,6 +146,10 @@ class StreamSessionViewModel: ObservableObject {
   private var lastGlassesFrameAt: TimeInterval?
   private var glassesReportedFolded = false
   private var statusTicker: Task<Void, Never>?
+  // Folding the glasses during a Race ends it after 10 s unless they are
+  // unfolded first (spec §B2). A bare stream stop never ends a Race.
+  private var foldEndTask: Task<Void, Never>?
+  private static let foldEndDelay: Duration = .seconds(10)
   // failureCount when the current glasses stream began; decode failures log relative to it.
   private var decodeFailureBaseline = 0
   // Delivered-frame-rate reporting for the event log.
@@ -431,6 +435,7 @@ class StreamSessionViewModel: ObservableObject {
         if case .hingesClosed = error {
           self.glassesReportedFolded = true
           self.refreshGlassesStatus()
+          self.startFoldToEndIfRacing()
         }
         // While Scout runs, reconnect handles glasses errors; alerts would
         // stack up with the phone in a pocket.
@@ -546,6 +551,8 @@ class StreamSessionViewModel: ObservableObject {
     attemptWatchdog = nil
     statusTicker?.cancel()
     statusTicker = nil
+    foldEndTask?.cancel()
+    foldEndTask = nil
     isReconnectingGlasses = false
     wantsStream = false
     tearDownGlassesLink()
@@ -582,6 +589,29 @@ class StreamSessionViewModel: ObservableObject {
     }
   }
 
+  private func startFoldToEndIfRacing() {
+    guard foldEndTask == nil, let gemini = geminiSessionVM, gemini.isGeminiActive else { return }
+    logEvent("fold: ending Race in 10 s unless unfolded")
+    SpokenCues.shared.speak("Ending Race in 10 seconds, unfold to cancel", onPhoneSpeaker: true)
+    foldEndTask = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: Self.foldEndDelay)
+      guard let self, !Task.isCancelled else { return }
+      self.foldEndTask = nil
+      guard self.glassesReportedFolded, let gemini = self.geminiSessionVM, gemini.isGeminiActive else { return }
+      self.logEvent("fold: ending Race")
+      switch await gemini.endScout() {
+      case .sent:
+        SpokenCues.shared.speak("Report sent to Setup_IQ", onPhoneSpeaker: true)
+      case .queued:
+        SpokenCues.shared.speak("Report saved. It will send when you have signal.", onPhoneSpeaker: true)
+      case .testMode:
+        SpokenCues.shared.speak("Test mode. Report not sent.", onPhoneSpeaker: true)
+      case .nothingToSend:
+        SpokenCues.shared.speak("Race ended", onPhoneSpeaker: true)
+      }
+    }
+  }
+
   private func refreshGlassesStatus() {
     let status = GlassesStatusRule.status(
       now: ProcessInfo.processInfo.systemUptime,
@@ -595,6 +625,12 @@ class StreamSessionViewModel: ObservableObject {
   }
 
   private func noteDeliveredFrame(_ sampleBuffer: CMSampleBuffer) {
+    if glassesReportedFolded, foldEndTask != nil {
+      foldEndTask?.cancel()
+      foldEndTask = nil
+      logEvent("fold: unfolded, Race continues")
+      SpokenCues.shared.speak("Race continues", onPhoneSpeaker: true)
+    }
     lastGlassesFrameAt = ProcessInfo.processInfo.systemUptime
     glassesReportedFolded = false
     let now = Date()

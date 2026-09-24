@@ -38,6 +38,9 @@ struct SettingsView: View {
         }
 
         Section(header: Text("Diagnostics"), footer: Text("Glasses connection events from this app run. Share them when reporting a glasses problem.")) {
+          NavigationLink("Scout reports") {
+            ScoutReportsView()
+          }
           NavigationLink("Glasses event log") {
             GlassesEventLogView()
           }

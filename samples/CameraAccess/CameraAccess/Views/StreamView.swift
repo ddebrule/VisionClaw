@@ -166,7 +166,7 @@ struct StreamView: View {
       }
     }
     .onChange(of: geminiVM.isGeminiActive) { _, isActive in
-      A11y.announce(isActive ? "Scout started" : "Scout ended")
+      A11y.announce(isActive ? "Race started" : "Race ended")
     }
     .onChange(of: geminiVM.isReconnecting) { _, isReconnecting in
       pendingScoutAnnouncement?.cancel()
@@ -230,7 +230,7 @@ struct ControlsView: View {
 
       CircleButton(
         icon: geminiVM.isGeminiActive ? "waveform.circle.fill" : "waveform.circle",
-        text: "Scout"
+        text: "Race"
       ) {
         Task {
           if geminiVM.isGeminiActive { geminiVM.stopSession() }
@@ -249,7 +249,7 @@ struct ControlsView: View {
         }
         .disabled(geminiVM.isSendingScoutReport)
         .confirmationDialog(
-          "End Scout session?",
+          "End Race?",
           isPresented: $showEndScoutConfirm,
           titleVisibility: .visible
         ) {
