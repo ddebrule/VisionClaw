@@ -37,7 +37,7 @@ class SpectreScoutBridge {
     guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
 
     if http.statusCode == 404 {
-      throw NSError(domain: "SpectreScout", code: 404, userInfo: [NSLocalizedDescriptionKey: "No active Spectre session. Start a session on your iPad first."])
+      throw NSError(domain: "SpectreScout", code: 404, userInfo: [NSLocalizedDescriptionKey: "No live session — activate one in SPECTRE first."])
     }
     guard (200...299).contains(http.statusCode) else { throw URLError(.badServerResponse) }
 
@@ -52,36 +52,43 @@ class SpectreScoutBridge {
     return ActiveSessionInfo(sessionId: sessionId, track: track, vehicles: vehicleModels)
   }
 
-  /// Send the accumulated field report to Spectre Setup_IQ.
-  func sendReport(
-    sessionId: String,
-    transcript: [ScoutTranscriptEntry],
-    durationMin: Int,
-    scoutContext: String,
-    vehicleModel: String
-  ) async throws {
-    guard let url = URL(string: GeminiConfig.spectreScoutURL) else { throw URLError(.badURL) }
-
+  /// Posts one capture's report. Never throws: the Outbox needs to know whether
+  /// to retry, not why a Swift error surfaced.
+  func deliver(_ capture: Capture) async -> ReportOutcome {
+    guard let url = URL(string: GeminiConfig.spectreScoutURL) else {
+      return .rejected("SPECTRE URL not configured")
+    }
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue(GeminiConfig.spectreUserToken, forHTTPHeaderField: "X-Scout-Token")
 
-    let transcriptArray = transcript.map { ["role": $0.role, "text": $0.text] }
     let body: [String: Any] = [
-      "session_id": sessionId,
-      "transcript": transcriptArray,
-      "duration_min": durationMin,
-      "scout_context": scoutContext,
-      "vehicle_model": vehicleModel,
+      "capture_id": capture.id.uuidString.lowercased(),
+      "session_id": capture.sessionId,
+      "transcript": capture.transcript.map { ["role": $0.role, "text": $0.text] },
+      "duration_min": capture.durationMin,
+      "scout_context": capture.scoutContext,
+      "vehicle_model": capture.vehicleModel,
     ]
-
-    request.httpBody = try JSONSerialization.data(withJSONObject: body)
-    let (_, response) = try await session.data(for: request)
-    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-      throw URLError(.badServerResponse)
+    do {
+      request.httpBody = try JSONSerialization.data(withJSONObject: body)
+      let (_, response) = try await session.data(for: request)
+      guard let http = response as? HTTPURLResponse else {
+        return .transientFailure("No HTTP response")
+      }
+      switch http.statusCode {
+      case 200...299:
+        NSLog("[SpectreScout] Report %@ accepted (%d turns, %d min)",
+              capture.id.uuidString, capture.transcript.count, capture.durationMin)
+        return .accepted
+      case 400, 401, 403, 404:
+        return .rejected("SPECTRE refused the report (HTTP \(http.statusCode))")
+      default:
+        return .transientFailure("SPECTRE error (HTTP \(http.statusCode))")
+      }
+    } catch {
+      return .transientFailure(error.localizedDescription)
     }
-    NSLog("[SpectreScout] Report sent. Context: %@, Vehicle: %@, Turns: %d, Duration: %d min",
-          scoutContext, vehicleModel, transcript.count, durationMin)
   }
 }
