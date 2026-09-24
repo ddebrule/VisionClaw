@@ -53,9 +53,13 @@ struct CameraAccessApp: App {
       MainAppView(wearables: Wearables.shared, viewModel: wearablesViewModel)
         .task {
           ScoutOutbox.shared.start()
+          TrackWalkFinisher.shared.resumeAll()
         }
         .onChange(of: scenePhase) { _, phase in
-          if phase == .active { ScoutOutbox.shared.resume() }
+          if phase == .active {
+            ScoutOutbox.shared.resume()
+            TrackWalkFinisher.shared.resumeAll()
+          }
         }
         // Show error alerts for view model failures
         .alert("Error", isPresented: $wearablesViewModel.showError) {
