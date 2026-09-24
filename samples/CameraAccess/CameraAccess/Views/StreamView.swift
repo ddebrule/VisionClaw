@@ -86,6 +86,25 @@ struct StreamView: View {
         .padding(.all, 24)
       }
 
+      if viewModel.isReconnectingGlasses {
+        VStack {
+          Spacer()
+          HStack(spacing: 8) {
+            ProgressView()
+              .tint(.white)
+            Text("Reconnecting to glasses…")
+              .font(.footnote.weight(.semibold))
+              .foregroundStyle(.white)
+          }
+          .padding(.horizontal, 14)
+          .padding(.vertical, 8)
+          .background(.black.opacity(0.6), in: Capsule())
+          .accessibilityElement(children: .combine)
+          .accessibilityLabel("Reconnecting to glasses")
+          .padding(.bottom, 140)
+        }
+      }
+
       VStack {
         Spacer()
         ControlsView(viewModel: viewModel, geminiVM: geminiVM, webrtcVM: webrtcVM)

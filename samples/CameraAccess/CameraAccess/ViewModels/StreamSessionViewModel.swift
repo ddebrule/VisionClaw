@@ -44,9 +44,17 @@ class StreamSessionViewModel: ObservableObject {
   @Published var hasActiveDevice: Bool = false
   @Published var streamingMode: StreamingMode = .glasses
   @Published var selectedResolution: StreamingResolution = .low
+  @Published private(set) var isReconnectingGlasses = false
 
   var isStreaming: Bool {
     streamingStatus != .stopped
+  }
+
+  /// Reconnect only while a Scout session is running, or its report is still
+  /// waiting to be sent (End lives on the streaming screen).
+  private var keepGlassesAlive: Bool {
+    guard let gemini = geminiSessionVM else { return false }
+    return gemini.isGeminiActive || gemini.hasUnsentReport
   }
 
   var resolutionLabel: String {
@@ -83,6 +91,11 @@ class StreamSessionViewModel: ObservableObject {
   // only a stop after it started counts as a drop.
   private var sessionHasStarted = false
   private var streamHasStarted = false
+  // Reconnect decisions (see GlassesLinkSupervisor); the view model only
+  // carries out the actions.
+  private var link = GlassesLinkSupervisor()
+  private var retryTask: Task<Void, Never>?
+  private var attemptWatchdog: Task<Void, Never>?
   private var sessionStateListenerToken: AnyListenerToken?
   private var stateListenerToken: AnyListenerToken?
   private var videoFrameListenerToken: AnyListenerToken?
@@ -183,6 +196,7 @@ class StreamSessionViewModel: ObservableObject {
   }
 
   func startSession() async {
+    _ = link.handle(.userStarted)
     connectGlasses()
   }
 
@@ -216,7 +230,9 @@ class StreamSessionViewModel: ObservableObject {
       logEvent("session start failed: \(String(describing: error))")
       deviceSession = nil
       handleGlassesDrop(reason: "session start failed")
-      showError("Couldn't reach the glasses. Make sure they're on, unfolded and connected.")
+      if !keepGlassesAlive {
+        showError("Couldn't reach the glasses. Make sure they're on, unfolded and connected.")
+      }
     }
   }
 
@@ -346,6 +362,9 @@ class StreamSessionViewModel: ObservableObject {
       Task { @MainActor [weak self] in
         guard let self, generation == self.cameraGeneration else { return }
         self.logEvent("stream error: \(String(describing: error))")
+        // While Scout runs, reconnect handles glasses errors; alerts would
+        // stack up with the phone in a pocket.
+        guard !self.keepGlassesAlive else { return }
         let message: String
         switch error {
         case .deviceNotConnected, .deviceNotFound:
@@ -382,6 +401,12 @@ class StreamSessionViewModel: ObservableObject {
     case .streaming:
       streamHasStarted = true
       streamingStatus = .streaming
+      _ = link.handle(.streaming)
+      attemptWatchdog?.cancel()
+      if isReconnectingGlasses {
+        logEvent("reconnected")
+        isReconnectingGlasses = false
+      }
     case .starting:
       streamHasStarted = true
       streamingStatus = .waiting
@@ -399,14 +424,57 @@ class StreamSessionViewModel: ObservableObject {
     }
   }
 
-  /// A stream or session ended that the user did not stop. A drop ends streaming.
+  /// A stream or session ended that the user did not stop. While Scout runs,
+  /// the glasses are reconnected; otherwise streaming ends.
   private func handleGlassesDrop(reason: String) {
     logEvent("drop: \(reason)")
-    markStopped()
+    apply(link.handle(.dropped(reconnectAllowed: keepGlassesAlive)))
+  }
+
+  private func apply(_ action: GlassesLinkAction) {
+    switch action {
+    case .none:
+      break
+    case .stop:
+      markStopped()
+    case .scheduleRetry(let delay):
+      // Keep streamingStatus off .stopped: StreamView closing would end Scout.
+      tearDownGlassesLink()
+      currentVideoFrame = nil
+      streamingStatus = .waiting
+      isReconnectingGlasses = true
+      attemptWatchdog?.cancel()
+      retryTask?.cancel()
+      retryTask = Task { @MainActor [weak self] in
+        try? await Task.sleep(for: .seconds(delay))
+        guard let self, !Task.isCancelled else { return }
+        self.apply(self.link.handle(.retryFired(reconnectAllowed: self.keepGlassesAlive)))
+      }
+    case .retryNow:
+      logEvent("reconnect attempt")
+      startAttemptWatchdog()
+      connectGlasses()
+    }
+  }
+
+  /// A reconnect attempt that has not produced frames in time counts as a drop.
+  private func startAttemptWatchdog() {
+    attemptWatchdog?.cancel()
+    attemptWatchdog = Task { @MainActor [weak self] in
+      try? await Task.sleep(for: .seconds(GlassesLinkSupervisor.attemptTimeout))
+      guard let self, !Task.isCancelled, self.link.phase == .connecting else { return }
+      self.handleGlassesDrop(reason: "reconnect attempt timed out")
+    }
   }
 
   /// Ends glasses streaming and returns the UI to the start screen.
   private func markStopped() {
+    _ = link.handle(.stopped)
+    retryTask?.cancel()
+    retryTask = nil
+    attemptWatchdog?.cancel()
+    attemptWatchdog = nil
+    isReconnectingGlasses = false
     wantsStream = false
     tearDownGlassesLink()
     currentVideoFrame = nil
