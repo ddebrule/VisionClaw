@@ -85,6 +85,10 @@ class StreamSessionViewModel: ObservableObject {
   private let videoDecoder = VideoDecoder()
   private var backgroundFrameCount = 0
   private var bgDiagLogged = false
+  // Foreground frames converted to UIImage: every 3rd (8 fps of 24) unless WebRTC
+  // is live and needs them all. makeUIImage is a GPU->CPU render on the main
+  // thread; doing it 24x/s froze the app. Replaced by FrameHub in Stage 3.
+  private var foregroundFrameCount = 0
 
   init(wearables: WearablesInterface) {
     self.wearables = wearables
@@ -163,6 +167,9 @@ class StreamSessionViewModel: ObservableObject {
         if !isInBackground {
           self.backgroundFrameCount = 0
           self.bgDiagLogged = false
+          self.foregroundFrameCount &+= 1
+          let webrtcNeedsEveryFrame = self.webrtcSessionVM?.isActive == true
+          guard webrtcNeedsEveryFrame || (self.foregroundFrameCount - 1) % 3 == 0 else { return }
           if let image = videoFrame.makeUIImage() {
             self.currentVideoFrame = image
             if !self.hasReceivedFirstFrame {
