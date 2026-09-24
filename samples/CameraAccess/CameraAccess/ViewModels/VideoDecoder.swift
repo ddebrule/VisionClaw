@@ -40,6 +40,15 @@ final class VideoDecoder {
   }
 
   func decode(_ sampleBuffer: CMSampleBuffer) throws {
+    do {
+      try decodeOrThrow(sampleBuffer)
+    } catch {
+      failureCount += 1
+      throw error
+    }
+  }
+
+  private func decodeOrThrow(_ sampleBuffer: CMSampleBuffer) throws {
     guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
       throw DecoderError.invalidFormat
     }
@@ -65,7 +74,6 @@ final class VideoDecoder {
     }
 
     guard result == noErr else {
-      failureCount += 1
       throw DecoderError.decodingFailed(result)
     }
   }
