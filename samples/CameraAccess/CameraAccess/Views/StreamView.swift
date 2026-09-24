@@ -58,12 +58,13 @@ struct StreamView: View {
             .aspectRatio(contentMode: .fill)
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
+            .accessibilityHidden(true)
         }
         .edgesIgnoringSafeArea(.all)
-      } else {
+      } else if viewModel.streamingMode == .iPhone {
         ProgressView()
           .scaleEffect(1.5)
-          .foregroundColor(.white)
+          .tint(.white)
       }
 
       if geminiVM.isGeminiActive {
@@ -112,23 +113,10 @@ struct StreamView: View {
         .padding(.all, 24)
       }
 
-      if viewModel.isReconnectingGlasses {
-        VStack {
-          Spacer()
-          HStack(spacing: 8) {
-            ProgressView()
-              .tint(.white)
-            Text("Reconnecting to glasses…")
-              .font(.footnote.weight(.semibold))
-              .foregroundStyle(.white)
-          }
-          .padding(.horizontal, 14)
-          .padding(.vertical, 8)
-          .background(.black.opacity(0.6), in: Capsule())
-          .accessibilityElement(children: .combine)
-          .accessibilityLabel("Reconnecting to glasses")
-          .padding(.bottom, 140)
-        }
+      if viewModel.streamingMode == .glasses, viewModel.glassesStatus != .live {
+        GlassesStatusPlaceholder(
+          status: viewModel.glassesStatus,
+          isReconnecting: viewModel.isReconnectingGlasses)
       }
 
       VStack {
@@ -142,6 +130,26 @@ struct StreamView: View {
         if viewModel.streamingStatus != .stopped { await viewModel.stopSession() }
         if geminiVM.isGeminiActive { geminiVM.stopSession() }
         if webrtcVM.isActive { webrtcVM.stopSession() }
+      }
+    }
+    .onChange(of: viewModel.glassesStatus) { oldStatus, newStatus in
+      guard viewModel.streamingMode == .glasses else { return }
+      switch newStatus {
+      case .putThemOn, .folded:
+        let caption = GlassesStatusText.caption(for: newStatus) ?? ""
+        A11y.announce("\(GlassesStatusText.title(for: newStatus)). \(caption)", assertive: true)
+      case .live where oldStatus == .putThemOn || oldStatus == .folded:
+        A11y.announce("Glasses video is back")
+      default:
+        break
+      }
+    }
+    .onChange(of: geminiVM.isGeminiActive) { _, isActive in
+      A11y.announce(isActive ? "Scout started" : "Scout ended")
+    }
+    .onChange(of: geminiVM.isReconnecting) { _, isReconnecting in
+      if isReconnecting {
+        A11y.announce("Scout connection lost. Reconnecting.", assertive: true)
       }
     }
     .sheet(isPresented: $viewModel.showPhotoPreview) {
@@ -181,9 +189,10 @@ struct ControlsView: View {
       }
 
       if viewModel.streamingMode == .glasses {
-        CircleButton(icon: "camera.fill", text: nil) {
+        CircleButton(icon: "camera.fill", text: nil, label: "Capture photo") {
           viewModel.capturePhoto()
         }
+        .accessibilityHint("Takes a photo through your glasses")
       }
 
       CircleButton(
@@ -237,6 +246,66 @@ struct ControlsView: View {
       }
       .opacity(geminiVM.isGeminiActive ? 0.4 : 1.0)
       .disabled(geminiVM.isGeminiActive)
+    }
+  }
+}
+
+/// Centered message for a glasses stream that is not showing live video.
+private struct GlassesStatusPlaceholder: View {
+  let status: GlassesStatus
+  let isReconnecting: Bool
+
+  var body: some View {
+    VStack(spacing: 10) {
+      if status == .connecting {
+        ProgressView()
+          .scaleEffect(1.5)
+          .tint(.white)
+      } else {
+        Image(systemName: "eyeglasses")
+          .font(.system(size: 40))
+          .foregroundStyle(.white)
+          .accessibilityHidden(true)
+      }
+      Text(GlassesStatusText.title(for: status))
+        .font(.headline)
+        .foregroundStyle(.white)
+      if let caption = GlassesStatusText.caption(for: status) {
+        Text(caption)
+          .font(.subheadline)
+          .foregroundStyle(.white.opacity(0.8))
+          .multilineTextAlignment(.center)
+      }
+      if isReconnecting, status != .connecting {
+        Text("Reconnecting automatically…")
+          .font(.footnote)
+          .foregroundStyle(.white.opacity(0.6))
+      }
+    }
+    .padding(24)
+    .frame(maxWidth: 320)
+    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 16))
+    .accessibilityElement(children: .combine)
+  }
+}
+
+/// Wording for the glasses placeholder and its announcements.
+enum GlassesStatusText {
+  static func title(for status: GlassesStatus) -> String {
+    switch status {
+    case .live: return ""
+    case .connecting: return "Connecting to your glasses"
+    case .putThemOn: return "Put on your glasses"
+    case .folded: return "Glasses folded"
+    }
+  }
+
+  static func caption(for status: GlassesStatus) -> String? {
+    switch status {
+    case .live, .connecting: return nil
+    case .putThemOn:
+      return "Open the hinges and put them on. The camera turns off when they're folded or off your face."
+    case .folded: return "Unfold them to start streaming."
     }
   }
 }

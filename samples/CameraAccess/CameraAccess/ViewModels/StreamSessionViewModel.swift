@@ -45,6 +45,9 @@ class StreamSessionViewModel: ObservableObject {
   @Published var streamingMode: StreamingMode = .glasses
   @Published var selectedResolution: StreamingResolution = .high
   @Published private(set) var isReconnectingGlasses = false
+  /// What the glasses screen should say; recomputed twice a second while
+  /// glasses streaming is on (see GlassesStatusRule).
+  @Published private(set) var glassesStatus: GlassesStatus = .connecting
 
   var isStreaming: Bool {
     streamingStatus != .stopped
@@ -137,6 +140,12 @@ class StreamSessionViewModel: ObservableObject {
   // here, off the main thread. VideoDecoder is used only on this queue.
   private let videoDecoder = VideoDecoder()
   private let decodeQueue = DispatchQueue(label: "glasses-decode", qos: .userInitiated)
+  // Glasses status inputs: when the user tapped Start, when the last frame
+  // arrived, and whether the glasses reported their hinges closed since then.
+  private var glassesStartedAt: TimeInterval = 0
+  private var lastGlassesFrameAt: TimeInterval?
+  private var glassesReportedFolded = false
+  private var statusTicker: Task<Void, Never>?
   // failureCount when the current glasses stream began; decode failures log relative to it.
   private var decodeFailureBaseline = 0
   // Delivered-frame-rate reporting for the event log.
@@ -288,6 +297,11 @@ class StreamSessionViewModel: ObservableObject {
     _ = link.handle(.userStarted)
     previewThrottle.reset()
     geminiThrottle.reset()
+    glassesStartedAt = ProcessInfo.processInfo.systemUptime
+    lastGlassesFrameAt = nil
+    glassesReportedFolded = false
+    glassesStatus = .connecting
+    startStatusTicker()
     connectGlasses()
   }
 
@@ -414,6 +428,10 @@ class StreamSessionViewModel: ObservableObject {
       Task { @MainActor [weak self] in
         guard let self, generation == self.cameraGeneration else { return }
         self.logEvent("stream error: \(String(describing: error))")
+        if case .hingesClosed = error {
+          self.glassesReportedFolded = true
+          self.refreshGlassesStatus()
+        }
         // While Scout runs, reconnect handles glasses errors; alerts would
         // stack up with the phone in a pocket.
         guard !self.keepGlassesAlive else { return }
@@ -526,6 +544,8 @@ class StreamSessionViewModel: ObservableObject {
     retryTask = nil
     attemptWatchdog?.cancel()
     attemptWatchdog = nil
+    statusTicker?.cancel()
+    statusTicker = nil
     isReconnectingGlasses = false
     wantsStream = false
     tearDownGlassesLink()
@@ -550,7 +570,32 @@ class StreamSessionViewModel: ObservableObject {
     photoDataListenerToken = nil
   }
 
+  /// Recomputes the glasses status twice a second while glasses streaming is on.
+  private func startStatusTicker() {
+    statusTicker?.cancel()
+    statusTicker = Task { @MainActor [weak self] in
+      while !Task.isCancelled {
+        self?.refreshGlassesStatus()
+        try? await Task.sleep(for: .milliseconds(500))
+      }
+    }
+  }
+
+  private func refreshGlassesStatus() {
+    let status = GlassesStatusRule.status(
+      now: ProcessInfo.processInfo.systemUptime,
+      startedAt: glassesStartedAt,
+      lastFrameAt: lastGlassesFrameAt,
+      hingesClosed: glassesReportedFolded)
+    if status != glassesStatus {
+      logEvent("glasses status: \(status)")
+      glassesStatus = status
+    }
+  }
+
   private func noteDeliveredFrame(_ sampleBuffer: CMSampleBuffer) {
+    lastGlassesFrameAt = ProcessInfo.processInfo.systemUptime
+    glassesReportedFolded = false
     let now = Date()
     if !loggedFirstFrame {
       loggedFirstFrame = true
