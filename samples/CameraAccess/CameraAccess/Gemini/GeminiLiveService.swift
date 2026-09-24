@@ -22,6 +22,15 @@ class GeminiLiveService: ObservableObject {
   var onInputTranscription: ((String) -> Void)?
   var onOutputTranscription: ((String) -> Void)?
 
+  /// Server announced it will close this connection in N seconds (~10 min limit).
+  /// The session is still usable until then; the owner should reconnect.
+  var onGoAway: ((Int) -> Void)?
+
+  private var resumption = LiveResumptionState()
+  var resumptionHandle: String? { resumption.handle }
+  // Invalidates a stale connect-timeout task when a newer connect() starts.
+  private var connectGeneration = 0
+
   private var lastUserSpeechEnd: Date?
   private var responseLatencyLogged = false
 
@@ -78,9 +87,12 @@ class GeminiLiveService: ObservableObject {
       }
       self.webSocketTask = self.urlSession.webSocketTask(with: url)
       self.webSocketTask?.resume()
+      self.connectGeneration += 1
+      let generation = self.connectGeneration
       Task {
         try? await Task.sleep(nanoseconds: 15_000_000_000)
         await MainActor.run {
+          guard generation == self.connectGeneration else { return }
           self.resolveConnect(success: false)
           if self.connectionState == .connecting || self.connectionState == .settingUp {
             self.connectionState = .error("Connection timed out")
@@ -102,6 +114,11 @@ class GeminiLiveService: ObservableObject {
     connectionState = .disconnected
     isModelSpeaking = false
     resolveConnect(success: false)
+  }
+
+  /// Forget the resumption handle so the next connect() starts a fresh Gemini session.
+  func resetResumption() {
+    resumption.reset()
   }
 
   func sendAudio(data: Data) {
@@ -151,8 +168,10 @@ class GeminiLiveService: ObservableObject {
           "automaticActivityDetection": [
             "disabled": false,
             "startOfSpeechSensitivity": "START_SENSITIVITY_HIGH",
-            "endOfSpeechSensitivity": "END_SENSITIVITY_LOW",
-            "silenceDurationMs": 500,
+            // HIGH + 400 ms: LOW + 500 ms was most of the perceived reply lag.
+            // If Scout_IQ starts answering mid-sentence pauses, raise silenceDurationMs first.
+            "endOfSpeechSensitivity": "END_SENSITIVITY_HIGH",
+            "silenceDurationMs": 400,
             "prefixPaddingMs": 40
           ],
           "activityHandling": "START_OF_ACTIVITY_INTERRUPTS",
@@ -163,6 +182,7 @@ class GeminiLiveService: ObservableObject {
             "targetTokens": 80000
           ]
         ],
+        "sessionResumption": resumption.setupField,
         "inputAudioTranscription": [:] as [String: Any],
         "outputAudioTranscription": [:] as [String: Any]
       ]
@@ -215,12 +235,16 @@ class GeminiLiveService: ObservableObject {
       return
     }
 
+    if let update = json["sessionResumptionUpdate"] as? [String: Any] {
+      resumption.apply(update: update)
+      return
+    }
+
     if let goAway = json["goAway"] as? [String: Any] {
       let timeLeft = goAway["timeLeft"] as? [String: Any]
       let seconds = timeLeft?["seconds"] as? Int ?? 0
-      connectionState = .disconnected
-      isModelSpeaking = false
-      onDisconnected?("Server closing (time left: \(seconds)s)")
+      NSLog("[Gemini] goAway: server closes this connection in %ds", seconds)
+      onGoAway?(seconds)
       return
     }
 
