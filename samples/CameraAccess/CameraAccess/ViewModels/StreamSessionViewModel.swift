@@ -54,8 +54,11 @@ class StreamSessionViewModel: ObservableObject {
   }
 
   /// Reconnect only while a Scout session is running, or its report is still
-  /// waiting to be sent (End lives on the streaming screen).
+  /// waiting to be sent (End lives on the streaming screen), or while a Track
+  /// Walk runs (a fold's stream stop must reconnect so unfolding resumes; a
+  /// bare stop finishes the walk and the link then winds down).
   private var keepGlassesAlive: Bool {
+    if trackWalk.isActive { return true }
     guard let gemini = geminiSessionVM else { return false }
     return gemini.isGeminiActive || gemini.hasUnsentReport
   }
@@ -133,6 +136,7 @@ class StreamSessionViewModel: ObservableObject {
   // Every source publishes each frame here once; the preview, Gemini and
   // WebRTC consumers subscribe and apply their own rates.
   private let frameHub = FrameHub()
+  let trackWalk = TrackWalkController()
   private let imageRenderer = PixelBufferImageRenderer()
   private var previewThrottle = FrameThrottle(minimumInterval: 1.0 / 8)
   private var geminiThrottle = FrameThrottle(minimumInterval: GeminiConfig.videoFrameInterval)
@@ -185,6 +189,14 @@ class StreamSessionViewModel: ObservableObject {
         self?.frameHub.publish(frame)
       }
     }
+  }
+
+  func subscribeFrames(_ subscriber: @escaping (VideoFrameSample) -> Void) -> UUID {
+    frameHub.subscribe(subscriber)
+  }
+
+  func unsubscribeFrames(_ id: UUID) {
+    frameHub.unsubscribe(id)
   }
 
   private func subscribeFrameConsumers() {
@@ -436,6 +448,7 @@ class StreamSessionViewModel: ObservableObject {
           self.glassesReportedFolded = true
           self.refreshGlassesStatus()
           self.startFoldToEndIfRacing()
+          self.trackWalk.glassesFolded()
         }
         // While Scout runs, reconnect handles glasses errors; alerts would
         // stack up with the phone in a pocket.
@@ -503,6 +516,9 @@ class StreamSessionViewModel: ObservableObject {
   /// the glasses are reconnected; otherwise streaming ends.
   private func handleGlassesDrop(reason: String) {
     logEvent("drop: \(reason)")
+    if trackWalk.isActive && !glassesReportedFolded {
+      trackWalk.glassesStreamStopped()
+    }
     apply(link.handle(.dropped(reconnectAllowed: keepGlassesAlive)))
   }
 
@@ -544,6 +560,7 @@ class StreamSessionViewModel: ObservableObject {
 
   /// Ends glasses streaming and returns the UI to the start screen.
   private func markStopped() {
+    if trackWalk.isActive { Task { await trackWalk.finish(reason: .leftScreen) } }
     _ = link.handle(.stopped)
     retryTask?.cancel()
     retryTask = nil
@@ -626,6 +643,9 @@ class StreamSessionViewModel: ObservableObject {
   }
 
   private func noteDeliveredFrame(_ sampleBuffer: CMSampleBuffer) {
+    if glassesReportedFolded {
+      trackWalk.glassesUnfolded()
+    }
     if glassesReportedFolded, foldEndTask != nil {
       foldEndTask?.cancel()
       foldEndTask = nil
@@ -700,6 +720,7 @@ class StreamSessionViewModel: ObservableObject {
   }
 
   private func stopIPhoneSession() {
+    if trackWalk.isActive { Task { await trackWalk.finish(reason: .leftScreen) } }
     iPhoneCameraManager?.stop()
     iPhoneCameraManager = nil
     currentVideoFrame = nil
