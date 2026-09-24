@@ -2,7 +2,7 @@ import UIKit
 import WebRTC
 
 /// Bridges pixel-buffer frames from DAT SDK / iPhone camera into WebRTC's video pipeline.
-/// Creates RTCVideoFrame from UIImage and feeds it to RTCVideoSource via the capturer delegate pattern.
+/// Wraps pixel buffers from the FrameHub into RTCVideoFrames and feeds them to RTCVideoSource via the capturer delegate pattern.
 class CustomVideoCapturer: RTCVideoCapturer {
   private var frameCount: Int64 = 0
 

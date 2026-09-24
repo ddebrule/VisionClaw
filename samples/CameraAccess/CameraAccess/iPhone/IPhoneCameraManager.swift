@@ -53,8 +53,8 @@ class IPhoneCameraManager: NSObject {
 
   func stop() {
     guard isRunning else { return }
-    sessionQueue.async { [weak self] in
-      self?.captureSession.stopRunning()
+    sessionQueue.async { [weak self, captureSession] in
+      captureSession.stopRunning()
       self?.isRunning = false
     }
   }

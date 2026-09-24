@@ -16,7 +16,6 @@
 //
 
 import AVFoundation
-import CoreImage
 import CoreMedia
 import CoreVideo
 import MWDATCamera
@@ -138,6 +137,8 @@ class StreamSessionViewModel: ObservableObject {
   // here, off the main thread. VideoDecoder is used only on this queue.
   private let videoDecoder = VideoDecoder()
   private let decodeQueue = DispatchQueue(label: "glasses-decode", qos: .userInitiated)
+  // failureCount when the current glasses stream began; decode failures log relative to it.
+  private var decodeFailureBaseline = 0
   // Delivered-frame-rate reporting for the event log.
   private var loggedFirstFrame = false
   private var deliveredFrames = 0
@@ -188,8 +189,8 @@ class StreamSessionViewModel: ObservableObject {
           previewThrottle.shouldPass(at: ProcessInfo.processInfo.systemUptime)
     else { return }
     imageRenderer.render(frame.pixelBuffer) { [weak self] image in
-      // A render that finishes after streaming stopped must not bring a frame back.
-      guard let self, self.streamingStatus != .stopped else { return }
+      // A render that finishes after the stream stopped or dropped must not bring an old frame back.
+      guard let self, self.streamingStatus == .streaming else { return }
       self.currentVideoFrame = image
       if !self.hasReceivedFirstFrame {
         self.hasReceivedFirstFrame = true
@@ -200,6 +201,8 @@ class StreamSessionViewModel: ObservableObject {
   /// One frame a second to Gemini while Scout runs, locked screen included.
   private func sendToGemini(_ frame: VideoFrameSample) {
     guard let gemini = geminiSessionVM, gemini.isGeminiActive,
+          gemini.connectionState == .ready,
+          SettingsManager.shared.videoStreamingEnabled,
           geminiThrottle.shouldPass(at: ProcessInfo.processInfo.systemUptime)
     else { return }
     imageRenderer.render(frame.pixelBuffer) { [weak gemini] image in
@@ -218,11 +221,12 @@ class StreamSessionViewModel: ObservableObject {
       return
     }
     let decoder = videoDecoder
+    let baseline = decodeFailureBaseline
     decodeQueue.async { [weak self] in
       do {
         try decoder.decode(sampleBuffer)
       } catch {
-        let failures = decoder.failureCount
+        let failures = decoder.failureCount - baseline
         if failures <= 3 || failures % 120 == 0 {
           NSLog("[Stream] decode failed (#%d): %@", failures, String(describing: error))
         }
@@ -353,6 +357,11 @@ class StreamSessionViewModel: ObservableObject {
     let generation = cameraGeneration
     streamHasStarted = false
     loggedFirstFrame = false
+    let decoder = videoDecoder
+    decodeQueue.async { [weak self] in
+      let baseline = decoder.failureCount
+      Task { @MainActor [weak self] in self?.decodeFailureBaseline = baseline }
+    }
     do {
       guard let newCamera = try session.addCamera(config: streamConfig()) else {
         logEvent("addCamera returned no camera")
