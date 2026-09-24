@@ -189,9 +189,9 @@ class AudioManager {
     playbackCountLock.lock()
     scheduledPlaybackBuffers += 1
     playbackCountLock.unlock()
-    // The completion handler also fires when playerNode.stop() flushes the buffer
+    // Callback fires after playback finishes; also fires when playerNode.stop() flushes the buffer
     // (interruption, stopPlayback), so the count always returns to zero.
-    playerNode.scheduleBuffer(buffer) { [weak self] in
+    playerNode.scheduleBuffer(buffer, at: nil, options: [], completionCallbackType: .dataPlayedBack) { [weak self] _ in
       guard let self else { return }
       self.playbackCountLock.lock()
       self.scheduledPlaybackBuffers = max(0, self.scheduledPlaybackBuffers - 1)
