@@ -260,8 +260,17 @@ class StreamSessionViewModel: ObservableObject {
       camera = newCamera
       // Subscribe before start() so no transition is missed.
       attachStreamListeners(to: newCamera.stream, generation: generation)
-      logEvent("camera added, starting stream")
-      newCamera.stream.start()
+      // Meta's ordering rule: route the glasses mic and let it settle before
+      // the camera stream starts, or audio can fail over to the phone.
+      Task { @MainActor [weak self] in
+        if GlassesAudioRoute.selectGlassesMicIfNeeded() {
+          self?.logEvent("glasses mic selected; letting the route settle")
+          try? await Task.sleep(for: GlassesAudioRoute.settleDelay)
+        }
+        guard let self, generation == self.cameraGeneration else { return }
+        self.logEvent("camera added, starting stream")
+        newCamera.stream.start()
+      }
     } catch {
       logEvent("addCamera failed: \(String(describing: error))")
       handleGlassesDrop(reason: "addCamera failed")

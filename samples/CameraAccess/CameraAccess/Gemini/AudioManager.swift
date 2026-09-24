@@ -69,6 +69,9 @@ class AudioManager {
     try session.setPreferredSampleRate(GeminiConfig.inputAudioSampleRate)
     try session.setPreferredIOBufferDuration(0.064)
     try session.setActive(true)
+    if !useIPhoneMode && !forceSpeaker {
+      GlassesAudioRoute.selectGlassesMicIfNeeded()
+    }
     if SettingsManager.shared.speakerOutputEnabled {
       try session.overrideOutputAudioPort(.speaker)
       NSLog("[Audio] Speaker output override: ON (iPhone speaker)")
@@ -439,5 +442,33 @@ class AudioManager {
     }
 
     return outputBuffer
+  }
+}
+
+/// Selects the glasses' Bluetooth HFP microphone, which also moves playback to
+/// the glasses. It does nothing when that mic is already routed, because
+/// re-selecting a live input is the route churn that has made glasses go deaf.
+enum GlassesAudioRoute {
+  /// How long to let the route settle before starting the camera stream.
+  static let settleDelay: Duration = .milliseconds(1_500)
+
+  /// Returns true when it changed the route (the caller should let it settle).
+  @discardableResult
+  static func selectGlassesMicIfNeeded() -> Bool {
+    let session = AVAudioSession.sharedInstance()
+    if session.currentRoute.inputs.contains(where: { $0.portType == .bluetoothHFP }) {
+      return false
+    }
+    guard let hfp = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) else {
+      return false
+    }
+    do {
+      try session.setPreferredInput(hfp)
+      NSLog("[Audio] Selected glasses HFP mic")
+      return true
+    } catch {
+      NSLog("[Audio] Could not select glasses HFP mic: %@", error.localizedDescription)
+      return false
+    }
   }
 }
