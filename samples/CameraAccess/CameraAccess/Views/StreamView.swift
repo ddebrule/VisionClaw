@@ -139,7 +139,8 @@ struct StreamView: View {
       pendingScoutAnnouncement?.cancel()
       Task {
         if viewModel.streamingStatus != .stopped { await viewModel.stopSession() }
-        if geminiVM.isGeminiActive { geminiVM.stopSession() }
+        // Leaving the stream mid-Race sends what was captured instead of dropping it.
+        if geminiVM.isGeminiActive || geminiVM.hasUnsentReport { await geminiVM.endScout() }
         if webrtcVM.isActive { webrtcVM.stopSession() }
       }
     }
@@ -233,12 +234,12 @@ struct ControlsView: View {
         text: "Race"
       ) {
         Task {
-          if geminiVM.isGeminiActive { geminiVM.stopSession() }
-          else { await geminiVM.startSession() }
+          if !geminiVM.isGeminiActive { await geminiVM.startSession() }
         }
       }
       .opacity(webrtcVM.isActive ? 0.4 : 1.0)
-      .disabled(webrtcVM.isActive)
+      .disabled(webrtcVM.isActive || geminiVM.isGeminiActive)
+      .accessibilityHint(geminiVM.isGeminiActive ? "Race is running. Use End to finish." : "Starts a Race with Scout")
 
       if geminiVM.isGeminiActive || geminiVM.hasUnsentReport {
         CircleButton(

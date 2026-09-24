@@ -73,15 +73,22 @@ class SpectreScoutBridge {
     ]
     do {
       request.httpBody = try JSONSerialization.data(withJSONObject: body)
-      let (_, response) = try await session.data(for: request)
+      let (data, response) = try await session.data(for: request, delegate: RedirectRefuser())
       guard let http = response as? HTTPURLResponse else {
         return .transientFailure("No HTTP response")
       }
       switch http.statusCode {
       case 200...299:
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ok = json["ok"] as? Bool, ok
+        else {
+          return .rejected("Unexpected reply from SPECTRE")
+        }
         NSLog("[SpectreScout] Report %@ accepted (%d turns, %d min)",
               capture.id.uuidString, capture.transcript.count, capture.durationMin)
         return .accepted
+      case 300...399:
+        return .rejected("SPECTRE redirected the report (HTTP \(http.statusCode))")
       case 400, 401, 403, 404:
         return .rejected("SPECTRE refused the report (HTTP \(http.statusCode))")
       default:
@@ -90,5 +97,16 @@ class SpectreScoutBridge {
     } catch {
       return .transientFailure(error.localizedDescription)
     }
+  }
+}
+
+/// Refuses HTTP redirects so a report can never be "delivered" to a login page.
+private final class RedirectRefuser: NSObject, URLSessionTaskDelegate {
+  func urlSession(
+    _ session: URLSession, task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest
+  ) async -> URLRequest? {
+    nil
   }
 }

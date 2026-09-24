@@ -3,7 +3,7 @@ import SwiftUI
 import AVFoundation
 
 /// How an End went, so callers (the fold-to-end countdown) can say so.
-enum EndScoutResult {
+enum EndScoutResult: Equatable {
   case sent
   case queued
   case nothingToSend
@@ -52,6 +52,8 @@ class GeminiSessionViewModel: ObservableObject {
   // goAway arrived mid-reply; reconnect once the turn completes.
   private var reconnectWhenIdle = false
   // Race silence rule (30 min warn, 45 min end); checked every 30 s while active.
+  // Activity is the racer's own speech (input transcription) only — the phone's
+  // spoken prompts must never count as the racer talking.
   private var idleGuard = IdleGuard(now: 0)
   private var idleTicker: Task<Void, Never>?
 
@@ -112,6 +114,8 @@ class GeminiSessionViewModel: ObservableObject {
     audioManager.onAudioCaptured = { [weak self] data in
       guard let self else { return }
       Task { @MainActor in
+        // The phone's own prompts must not be heard as the racer.
+        if SpokenCues.shared.isSpeaking { return }
         let speakerOnPhone = self.streamingMode == .iPhone || SettingsManager.shared.speakerOutputEnabled
         // isModelSpeaking covers the gap before the first buffer is scheduled;
         // isSpeakerActive covers the tail that plays after generation ends.
@@ -132,7 +136,6 @@ class GeminiSessionViewModel: ObservableObject {
     geminiService.onOutputTranscription = { [weak self] text in
       guard let self else { return }
       Task { @MainActor in
-        self.idleGuard.noteActivity(at: ProcessInfo.processInfo.systemUptime)
         self.aiTranscript += text
         self.pendingAIText += text
       }
@@ -332,7 +335,11 @@ class GeminiSessionViewModel: ObservableObject {
           SpokenCues.shared.speak("Scout still running")
         case .end:
           NSLog("[ScoutVM] Idle 45 min: ending the Race")
-          await self.endScout()
+          let result = await self.endScout()
+          SpokenCues.shared.speak(
+            result == .sent ? "Race ended after 45 quiet minutes. Report sent to Setup_IQ."
+                            : "Race ended after 45 quiet minutes. Report saved.",
+            onPhoneSpeaker: true)
           return
         }
       }
@@ -387,8 +394,16 @@ class GeminiSessionViewModel: ObservableObject {
       self.isReconnecting = false
       self.reconnectTask = nil
       guard self.isGeminiActive else { return }
-      self.stopSession()
-      self.errorMessage = "Connection lost (\(reason)). Tap End to send what was captured."
+      // Gemini is gone for good: save the transcript to the Outbox now rather
+      // than leaving it in memory, where a pocketed phone could lose it.
+      let result = await self.endScout()
+      SpokenCues.shared.speak(
+        result == .sent ? "Scout connection lost. Report sent to Setup_IQ."
+                        : "Scout connection lost. Report saved.",
+        onPhoneSpeaker: true)
+      if self.errorMessage == nil {
+        self.errorMessage = "Connection lost (\(reason)). The report was handed to the Outbox — see Settings → Scout reports."
+      }
     }
   }
 

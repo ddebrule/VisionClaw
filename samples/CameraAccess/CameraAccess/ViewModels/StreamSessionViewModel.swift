@@ -592,7 +592,8 @@ class StreamSessionViewModel: ObservableObject {
   private func startFoldToEndIfRacing() {
     guard foldEndTask == nil, let gemini = geminiSessionVM, gemini.isGeminiActive else { return }
     logEvent("fold: ending Race in 10 s unless unfolded")
-    SpokenCues.shared.speak("Ending Race in 10 seconds, unfold to cancel", onPhoneSpeaker: true)
+    // The Race is still live: stay on the current route (forcing the speaker moves the mic and resets the audio engine).
+    SpokenCues.shared.speak("Ending Race in 10 seconds, unfold to cancel", onPhoneSpeaker: false)
     foldEndTask = Task { @MainActor [weak self] in
       try? await Task.sleep(for: Self.foldEndDelay)
       guard let self, !Task.isCancelled else { return }
@@ -629,7 +630,7 @@ class StreamSessionViewModel: ObservableObject {
       foldEndTask?.cancel()
       foldEndTask = nil
       logEvent("fold: unfolded, Race continues")
-      SpokenCues.shared.speak("Race continues", onPhoneSpeaker: true)
+      SpokenCues.shared.speak("Race continues", onPhoneSpeaker: false)
     }
     lastGlassesFrameAt = ProcessInfo.processInfo.systemUptime
     glassesReportedFolded = false

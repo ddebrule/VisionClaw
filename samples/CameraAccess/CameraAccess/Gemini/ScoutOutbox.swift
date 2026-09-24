@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import UIKit
 
 /// Saved queue of Scout reports on their way to SPECTRE. Every change is
 /// written to Application Support/ScoutOutbox/manifest.json before a send
@@ -52,6 +53,12 @@ final class ScoutOutbox: ObservableObject {
     return captures.first { $0.id == capture.id }?.state ?? .failed
   }
 
+  /// Retries anything waiting, when the app comes back to the foreground.
+  func resume() {
+    guard started else { return }
+    reconcile()
+  }
+
   func retry(_ id: UUID) {
     guard let index = captures.firstIndex(where: { $0.id == id }) else { return }
     OutboxRules.retry(&captures[index])
@@ -71,6 +78,11 @@ final class ScoutOutbox: ObservableObject {
           OutboxRules.needsSend(captures[index])
     else { return }
     inFlight.insert(id)
+    // A report send must finish even if the phone locks right after End.
+    let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "ScoutReport")
+    defer {
+      if backgroundTask != .invalid { UIApplication.shared.endBackgroundTask(backgroundTask) }
+    }
     OutboxRules.beginSend(&captures[index])
     save()
     let outcome = await bridge.deliver(captures[index])

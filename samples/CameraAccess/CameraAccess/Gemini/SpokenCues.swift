@@ -9,6 +9,8 @@ final class SpokenCues: NSObject, AVSpeechSynthesizerDelegate {
   private let synthesizer = AVSpeechSynthesizer()
   private var overrodeSpeaker = false
 
+  var isSpeaking: Bool { synthesizer.isSpeaking }
+
   override private init() {
     super.init()
     synthesizer.delegate = self

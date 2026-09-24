@@ -31,6 +31,7 @@ struct CameraAccessApp: App {
   #endif
   private let wearables: WearablesInterface
   @StateObject private var wearablesViewModel: WearablesViewModel
+  @Environment(\.scenePhase) private var scenePhase
 
   init() {
     do {
@@ -52,6 +53,9 @@ struct CameraAccessApp: App {
       MainAppView(wearables: Wearables.shared, viewModel: wearablesViewModel)
         .task {
           ScoutOutbox.shared.start()
+        }
+        .onChange(of: scenePhase) { _, phase in
+          if phase == .active { ScoutOutbox.shared.resume() }
         }
         // Show error alerts for view model failures
         .alert("Error", isPresented: $wearablesViewModel.showError) {
