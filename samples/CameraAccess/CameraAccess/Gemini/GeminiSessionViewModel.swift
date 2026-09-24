@@ -60,7 +60,7 @@ class GeminiSessionViewModel: ObservableObject {
     isFetchingSession = true
     let sessionInfo: ActiveSessionInfo
     do {
-      sessionInfo = try await scoutBridge.fetchActiveSession()
+      sessionInfo = try await resolveSession()
     } catch {
       isFetchingSession = false
       errorMessage = error.localizedDescription
@@ -255,6 +255,17 @@ class GeminiSessionViewModel: ObservableObject {
       stopSession()
       return
     }
+
+    if SettingsManager.shared.scoutTestMode {
+      stopSession()
+      let turns = scoutHistory.count
+      let minutes = scoutStartTime.map { Int(Date().timeIntervalSince($0) / 60) } ?? 0
+      NSLog("[ScoutVM] Test mode: report not sent (%d turns, %d min)", turns, minutes)
+      scoutReportSent = true
+      errorMessage = "Test mode — report not sent (\(turns) turns, \(minutes) min)"
+      return
+    }
+
     isSendingScoutReport = true
     stopSession()
     let duration = scoutStartTime.map { Int(Date().timeIntervalSince($0) / 60) } ?? 0
@@ -286,6 +297,15 @@ class GeminiSessionViewModel: ObservableObject {
   }
 
   // MARK: - Private
+
+  /// Resolve the active Spectre session, or a synthetic one when Scout test mode is on
+  /// (device-testing Gemini Live with no SPECTRE session running).
+  private func resolveSession() async throws -> ActiveSessionInfo {
+    if SettingsManager.shared.scoutTestMode {
+      return ActiveSessionInfo(sessionId: "test-mode", track: "Test Track", vehicles: ["Test Buggy", "Test Truggy"])
+    }
+    return try await scoutBridge.fetchActiveSession()
+  }
 
   /// Keep a Race going across Google's ~10-minute connection limit and signal drops.
   /// Audio capture keeps running; GeminiLiveService drops audio until it is ready again.

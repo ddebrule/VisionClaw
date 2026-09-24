@@ -11,6 +11,7 @@ final class SettingsManager {
     case webrtcSignalingURL
     case speakerOutputEnabled
     case videoStreamingEnabled
+    case scoutTestMode
   }
 
   private init() {}
@@ -48,11 +49,18 @@ final class SettingsManager {
     set { defaults.set(newValue, forKey: Key.videoStreamingEnabled.rawValue) }
   }
 
+  // MARK: - Scout
+
+  var scoutTestMode: Bool {
+    get { defaults.bool(forKey: Key.scoutTestMode.rawValue) }
+    set { defaults.set(newValue, forKey: Key.scoutTestMode.rawValue) }
+  }
+
   // MARK: - Reset
 
   func resetAll() {
     for key in [Key.geminiAPIKey, .geminiSystemPrompt, .webrtcSignalingURL,
-                .speakerOutputEnabled, .videoStreamingEnabled] {
+                .speakerOutputEnabled, .videoStreamingEnabled, .scoutTestMode] {
       defaults.removeObject(forKey: key.rawValue)
     }
   }

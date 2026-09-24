@@ -9,6 +9,7 @@ struct SettingsView: View {
   @State private var webrtcSignalingURL: String = ""
   @State private var speakerOutputEnabled: Bool = false
   @State private var videoStreamingEnabled: Bool = true
+  @State private var scoutTestMode: Bool = false
   @State private var showResetConfirmation = false
 
   var body: some View {
@@ -30,6 +31,10 @@ struct SettingsView: View {
           TextEditor(text: $geminiSystemPrompt)
             .font(.system(.body, design: .monospaced))
             .frame(minHeight: 200)
+        }
+
+        Section(header: Text("Scout"), footer: Text("Runs Scout without an active SPECTRE session. Reports are not sent.")) {
+          Toggle("Scout test mode (no SPECTRE)", isOn: $scoutTestMode)
         }
 
         Section(header: Text("WebRTC")) {
@@ -97,6 +102,7 @@ struct SettingsView: View {
     webrtcSignalingURL = settings.webrtcSignalingURL
     speakerOutputEnabled = settings.speakerOutputEnabled
     videoStreamingEnabled = settings.videoStreamingEnabled
+    scoutTestMode = settings.scoutTestMode
   }
 
   private func save() {
@@ -105,5 +111,6 @@ struct SettingsView: View {
     settings.webrtcSignalingURL = webrtcSignalingURL.trimmingCharacters(in: .whitespacesAndNewlines)
     settings.speakerOutputEnabled = speakerOutputEnabled
     settings.videoStreamingEnabled = videoStreamingEnabled
+    settings.scoutTestMode = scoutTestMode
   }
 }

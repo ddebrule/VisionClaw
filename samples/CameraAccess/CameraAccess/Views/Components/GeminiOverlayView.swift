@@ -7,6 +7,9 @@ struct GeminiStatusBar: View {
     HStack(spacing: 8) {
       // Gemini connection pill
       StatusPill(color: geminiStatusColor, text: geminiStatusText)
+      if SettingsManager.shared.scoutTestMode {
+        ScoutTestModeBadge()
+      }
     }
   }
 
@@ -46,6 +49,18 @@ struct StatusPill: View {
     .padding(.vertical, 6)
     .background(Color.black.opacity(0.6))
     .cornerRadius(16)
+  }
+}
+
+struct ScoutTestModeBadge: View {
+  var body: some View {
+    Text("TEST MODE")
+      .font(.caption2.bold())
+      .foregroundStyle(.white)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+      .background(Color.orange, in: Capsule())
+      .accessibilityLabel("Scout test mode on")
   }
 }
 
