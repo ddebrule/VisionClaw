@@ -404,8 +404,8 @@ class StreamSessionViewModel: ObservableObject {
       // Meta's ordering rule: route the glasses mic and let it settle before
       // the camera stream starts, or audio can fail over to the phone.
       Task { @MainActor [weak self] in
-        // Only while Scout audio is up and the owner hasn't asked for the phone speaker.
-        if self?.geminiSessionVM?.isGeminiActive == true,
+        // Only while Scout audio or a Track Walk is up and the owner hasn't asked for the phone speaker.
+        if (self?.geminiSessionVM?.isGeminiActive == true || self?.trackWalk.keepsGlassesAlive == true),
            !SettingsManager.shared.speakerOutputEnabled,
            GlassesAudioRoute.selectGlassesMicIfNeeded() {
           self?.logEvent("glasses mic selected; letting the route settle")
@@ -516,8 +516,14 @@ class StreamSessionViewModel: ObservableObject {
   /// the glasses are reconnected; otherwise streaming ends.
   private func handleGlassesDrop(reason: String) {
     logEvent("drop: \(reason)")
-    if trackWalk.isActive && !glassesReportedFolded {
-      trackWalk.glassesStreamStopped()
+    if trackWalk.phase == .recording && !glassesReportedFolded {
+      // Keep the link (and its error listener) up for the walk's 1 s grace, so a
+      // late hingesClosed still pauses instead of finishing; then handle the drop.
+      trackWalk.glassesStreamStopped { [weak self] in
+        guard let self else { return }
+        self.apply(self.link.handle(.dropped(reconnectAllowed: self.keepGlassesAlive)))
+      }
+      return
     }
     apply(link.handle(.dropped(reconnectAllowed: keepGlassesAlive)))
   }

@@ -20,7 +20,7 @@ struct ScoutReportsView: View {
               .font(.subheadline)
               .foregroundStyle(capture.state == .failed ? .red : .secondary)
           }
-          Text("\(capture.vehicleModel.isEmpty ? "Track Walk" : capture.vehicleModel) · \(capture.durationMin) min · \(capture.createdAt.formatted(date: .abbreviated, time: .shortened))")
+          Text("\(capture.mode == .trackWalk ? "Track Walk" : capture.vehicleModel) · \(capture.durationMin) min · \(capture.createdAt.formatted(date: .abbreviated, time: .shortened))")
             .font(.caption)
             .foregroundStyle(.secondary)
           if let error = capture.lastError {

@@ -6,9 +6,13 @@ import Speech
 /// Files, storage, Photos and on-device transcription for Track Walk.
 enum TrackWalkMedia {
   /// Application Support/TrackWalks — recordings live here until uploaded (Plan 7).
+  /// Kept out of iCloud backup: walks are large and live here only until uploaded.
   static let folder: URL = {
-    let folder = URL.applicationSupportDirectory.appending(path: "TrackWalks", directoryHint: .isDirectory)
+    var folder = URL.applicationSupportDirectory.appending(path: "TrackWalks", directoryHint: .isDirectory)
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = true
+    try? folder.setResourceValues(values)
     return folder
   }()
 

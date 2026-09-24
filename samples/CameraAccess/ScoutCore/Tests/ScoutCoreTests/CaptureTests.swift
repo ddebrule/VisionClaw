@@ -165,6 +165,20 @@ final class CaptureTests: XCTestCase {
     XCTAssertEqual(OutboxRules.silentWalkLine, "(Silent walk — no narration recorded.)")
   }
 
+  func testCuesAreNotNarration() {
+    var capture = walk(state: .recorded)
+    OutboxRules.markTranscribed(&capture, lines: ["Recording started.", "Paused", "RECORDING", "Stopped."])
+    XCTAssertEqual(capture.noNarration, true)
+    XCTAssertEqual(capture.transcript, [TranscriptLine(role: "user", text: OutboxRules.silentWalkLine)])
+  }
+
+  func testCuesRemovedButSpeechKept() {
+    var capture = walk(state: .recorded)
+    OutboxRules.markTranscribed(&capture, lines: ["Recording started.", "double into the triple"])
+    XCTAssertEqual(capture.noNarration, false)
+    XCTAssertEqual(capture.transcript, [TranscriptLine(role: "user", text: "double into the triple")])
+  }
+
   func testHeldTrackWalkIsNotSent() {
     var capture = walk(state: .recorded)
     OutboxRules.markTranscribed(&capture, lines: ["line"])

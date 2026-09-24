@@ -21,6 +21,7 @@ final class TrackWalkController: ObservableObject {
     case pausedTooLong
     case glassesStopped
     case leftScreen
+    case recordingFailed
   }
 
   @Published private(set) var phase: Phase = .idle
@@ -40,6 +41,10 @@ final class TrackWalkController: ObservableObject {
   private var unsubscribeFrames: ((UUID) -> Void)?
   private var ticker: Task<Void, Never>?
   private var stopGrace: Task<Void, Never>?
+  /// What the view model does once the stop grace resolves (reconnect or wind down the link).
+  private var pendingStreamStop: (() -> Void)?
+  /// Stop pressed (or the screen left) while still preparing; `begin` backs out.
+  private var cancelRequested = false
   private var warned = false
   private var pausedSince: TimeInterval?
 
@@ -53,6 +58,7 @@ final class TrackWalkController: ObservableObject {
   ) async {
     guard phase == .idle else { return }
     phase = .preparing
+    cancelRequested = false
     errorMessage = nil
     sessionTrack = session.track
 
@@ -60,8 +66,9 @@ final class TrackWalkController: ObservableObject {
       fail("A Track Walk needs 3 GB free. Free up space and try again.")
       return
     }
-    // Download the speech model now, while online; recording goes ahead either way.
-    _ = await TrackWalkMedia.ensureSpeechModel()
+    // Download the speech model while online, without holding up the recording;
+    // the finisher checks for it again before transcribing.
+    Task.detached(priority: .utility) { _ = await TrackWalkMedia.ensureSpeechModel() }
 
     do {
       let audio = AVAudioSession.sharedInstance()
@@ -72,9 +79,17 @@ final class TrackWalkController: ObservableObject {
       fail("Audio could not start: \(error.localizedDescription)")
       return
     }
+    guard !cancelRequested else { cancelPreparing(recorder: nil); return }
 
     let id = UUID()
     let recorder = TrackWalkRecorder(outputURL: TrackWalkMedia.url(for: id, ext: "mov"))
+    recorder.onFailure = { [weak self] _ in
+      Task { @MainActor in
+        guard let self, self.phase == .recording || self.phase == .paused else { return }
+        SpokenCues.shared.speak("Recording failed")
+        await self.finish(reason: .recordingFailed)
+      }
+    }
     do {
       try recorder.start()
     } catch {
@@ -82,6 +97,7 @@ final class TrackWalkController: ObservableObject {
       fail("The microphone could not start.")
       return
     }
+    guard !cancelRequested else { cancelPreparing(recorder: recorder); return }
     let capture = Capture(
       id: id, mode: .trackWalk, sessionId: session.id, trackName: session.track,
       transcript: [], scoutContext: "Track Walk", vehicleModel: "", durationMin: 0,
@@ -114,8 +130,11 @@ final class TrackWalkController: ObservableObject {
   func glassesFolded() {
     stopGrace?.cancel()
     stopGrace = nil
-    guard phase == .recording else { return }
-    pause(byFold: true)
+    let proceed = pendingStreamStop
+    pendingStreamStop = nil
+    if phase == .recording { pause(byFold: true) }
+    // The stream stop that started the grace was this fold: let the link reconnect.
+    proceed?()
   }
 
   func glassesUnfolded() {
@@ -126,14 +145,23 @@ final class TrackWalkController: ObservableObject {
   /// The glasses stream stopped. A fold reports hingesClosed around the same
   /// moment; if none arrives within 1 s, it was a tap-and-hold or a drop, and
   /// the walk finishes (spec §B4: a drop can't be told from a tap-and-hold).
-  func glassesStreamStopped() {
-    guard phase == .recording, stopGrace == nil else { return }
+  /// `proceed` is the caller's handling of the stop (reconnect or wind down);
+  /// it runs once the grace resolves, so the glasses link (and its error
+  /// listener) stays up long enough for a late hingesClosed to arrive.
+  func glassesStreamStopped(then proceed: @escaping () -> Void) {
+    if stopGrace != nil { return }  // A grace is already running; it will proceed.
+    guard phase == .recording else { proceed(); return }
+    pendingStreamStop = proceed
     stopGrace = Task { @MainActor [weak self] in
       try? await Task.sleep(for: .seconds(1))
       guard let self, !Task.isCancelled else { return }
       self.stopGrace = nil
-      guard self.phase == .recording else { return }
-      await self.finish(reason: .glassesStopped)
+      let proceed = self.pendingStreamStop
+      self.pendingStreamStop = nil
+      if self.phase == .recording {
+        await self.finish(reason: .glassesStopped)
+      }
+      proceed?()
     }
   }
 
@@ -158,12 +186,19 @@ final class TrackWalkController: ObservableObject {
   // MARK: - Stop
 
   func finish(reason: FinishReason) async {
+    if phase == .preparing {
+      cancelRequested = true
+      return
+    }
     guard phase == .recording || phase == .paused, let recorder, let id = captureId else { return }
     phase = .finishing
     ticker?.cancel()
     ticker = nil
     stopGrace?.cancel()
     stopGrace = nil
+    // A stream stop still in its grace: hand it back once the walk is idle, so the link winds down.
+    let pendingStop = pendingStreamStop
+    pendingStreamStop = nil
     if let frameSubscription { unsubscribeFrames?(frameSubscription) }
     frameSubscription = nil
 
@@ -177,10 +212,24 @@ final class TrackWalkController: ObservableObject {
     captureId = nil
     isPausedByFold = false
     TrackWalkFinisher.shared.liveCaptureId = nil
-    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    // The audio session stays active so the final cue is not cut off; the next
+    // Race start reconfigures it (AudioManager).
     phase = .idle
+    pendingStop?()
     // A fresh task: it must not inherit the caller's cancellation (an automatic stop runs inside the ticker being cancelled).
     Task { await TrackWalkFinisher.shared.advance(id) }
+  }
+
+  /// Backs out of a start that was cancelled while preparing: nothing is saved.
+  private func cancelPreparing(recorder: TrackWalkRecorder?) {
+    NSLog("[TrackWalk] Start cancelled while preparing")
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    if let recorder {
+      recorder.onFailure = nil
+      Task { _ = await recorder.finish() }
+    }
+    cancelRequested = false
+    phase = .idle
   }
 
   // MARK: - Limits

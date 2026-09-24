@@ -96,6 +96,13 @@ public enum ReportOutcome: Equatable, Sendable {
 public enum OutboxRules {
   public static let silentWalkLine = "(Silent walk — no narration recorded.)"
 
+  /// The app's own spoken Track Walk cues (lower case). The mic hears them, but
+  /// they are not narration, so they are dropped from a walk's transcript.
+  public static let cuePhrases: Set<String> = [
+    "recording started", "recording", "paused", "two minutes left",
+    "stopped", "storage full, saved", "recording failed",
+  ]
+
   public static func needsSend(_ capture: Capture, trackWalkReportsEnabled: Bool = true) -> Bool {
     if capture.mode == .trackWalk && !trackWalkReportsEnabled { return false }
     switch capture.state {
@@ -112,17 +119,25 @@ public enum OutboxRules {
     capture.state = .recorded
   }
 
-  /// Transcription done: the report is ready. Blank lines are dropped; no speech
-  /// at all becomes a single placeholder line with noNarration set.
+  /// Transcription done: the report is ready. Blank lines and the app's own cues
+  /// are dropped; no speech at all becomes a single placeholder line with noNarration set.
   public static func markTranscribed(_ capture: inout Capture, lines: [String]) {
     let spoken = lines
       .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !isCue($0) }
       .filter { !$0.isEmpty }
     capture.noNarration = spoken.isEmpty
     capture.transcript = spoken.isEmpty
       ? [TranscriptLine(role: "user", text: silentWalkLine)]
       : spoken.map { TranscriptLine(role: "user", text: $0) }
     capture.state = .reportPending
+  }
+
+  private static func isCue(_ line: String) -> Bool {
+    let bare = line
+      .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+      .lowercased()
+    return cuePhrases.contains(bare)
   }
 
   public static func beginSend(_ capture: inout Capture) {
