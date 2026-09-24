@@ -25,6 +25,32 @@ struct StreamView: View {
           remoteVideoTrack: webrtcVM.remoteVideoTrack,
           hasRemoteVideo: webrtcVM.hasRemoteVideo
         )
+      } else if viewModel.streamingMode == .iPhone, let session = viewModel.iPhoneCaptureSession {
+        // Straight off the capture session: hardware-composited at sensor
+        // resolution, rather than a converted frame stretched to fit.
+        IPhoneCameraPreviewView(session: session)
+          .ignoresSafeArea()
+          .gesture(
+            MagnifyGesture()
+              .onChanged { value in viewModel.updateIPhoneZoom(scale: value.magnification) }
+              .onEnded { _ in viewModel.beginIPhoneZoomGesture() }
+          )
+          .onAppear { viewModel.beginIPhoneZoomGesture() }
+          .overlay(alignment: .topTrailing) {
+            // Only while zoomed: at 1x the label is noise on top of the scene.
+            if viewModel.iPhoneZoom > 1.05 {
+              Text(String(format: "%.1f×", viewModel.iPhoneZoom))
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.black.opacity(0.45), in: Capsule())
+                .padding(.top, 60)
+                .padding(.trailing, 16)
+                .accessibilityLabel(String(format: "Zoom %.1f times", viewModel.iPhoneZoom))
+            }
+          }
+          .accessibilityLabel("Camera preview. Pinch to zoom.")
       } else if let videoFrame = viewModel.currentVideoFrame, viewModel.hasReceivedFirstFrame {
         GeometryReader { geometry in
           Image(uiImage: videoFrame)

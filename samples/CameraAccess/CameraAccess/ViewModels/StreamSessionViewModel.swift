@@ -15,6 +15,7 @@
 // path touches neither. Every SDK event is written to the glasses event log.
 //
 
+import AVFoundation
 import CoreImage
 import CoreMedia
 import CoreVideo
@@ -106,6 +107,27 @@ class StreamSessionViewModel: ObservableObject {
   private var deviceMonitorTask: Task<Void, Never>?
   private var iPhoneCameraManager: IPhoneCameraManager?
 
+  /// Non-nil in iPhone mode: the view draws an AVCaptureVideoPreviewLayer off
+  /// the live session instead of showing converted frames.
+  var iPhoneCaptureSession: AVCaptureSession? { iPhoneCameraManager?.session }
+
+  /// Shown while pinching, and reset when the camera stops.
+  @Published var iPhoneZoom: CGFloat = 1
+  /// Zoom when the current pinch began; a magnify gesture reports scale
+  /// relative to its own start, not to the last committed value.
+  private var zoomAtGestureStart: CGFloat = 1
+
+  func beginIPhoneZoomGesture() {
+    zoomAtGestureStart = iPhoneZoom
+  }
+
+  func updateIPhoneZoom(scale: CGFloat) {
+    guard let camera = iPhoneCameraManager else { return }
+    let target = min(max(zoomAtGestureStart * scale, 1), camera.maxAvailableZoom)
+    iPhoneZoom = target
+    camera.setZoom(target)
+  }
+
   // Every source publishes each frame here once; the preview, Gemini and
   // WebRTC consumers subscribe and apply their own rates.
   private let frameHub = FrameHub()
@@ -161,7 +183,8 @@ class StreamSessionViewModel: ObservableObject {
 
   /// At most 8 preview images a second, and none while backgrounded.
   private func showPreview(_ frame: VideoFrameSample) {
-    guard UIApplication.shared.applicationState != .background,
+    guard streamingMode == .glasses || webrtcSessionVM?.isActive == true,
+          UIApplication.shared.applicationState != .background,
           previewThrottle.shouldPass(at: ProcessInfo.processInfo.systemUptime)
     else { return }
     imageRenderer.render(frame.pixelBuffer) { [weak self] image in
@@ -590,6 +613,8 @@ class StreamSessionViewModel: ObservableObject {
     currentVideoFrame = nil
     hasReceivedFirstFrame = false
     streamingStatus = .stopped
+    iPhoneZoom = 1
+    zoomAtGestureStart = 1
     streamingMode = .glasses
     NSLog("[Stream] iPhone camera mode stopped")
   }

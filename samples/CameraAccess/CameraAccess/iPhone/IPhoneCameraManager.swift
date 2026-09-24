@@ -7,6 +7,38 @@ class IPhoneCameraManager: NSObject {
   private let sessionQueue = DispatchQueue(label: "iphone-camera-session")
   private var isRunning = false
 
+  /// For AVCaptureVideoPreviewLayer: drawing the preview from the session is
+  /// sharper and cheaper than displaying converted frames.
+  var session: AVCaptureSession { captureSession }
+
+  // MARK: - Zoom
+
+  private var device: AVCaptureDevice?
+  /// Beyond roughly this the wide-angle sensor is just upscaling, which costs
+  /// detail rather than adding it.
+  private let maxZoom: CGFloat = 8
+
+  var maxAvailableZoom: CGFloat {
+    guard let device else { return 1 }
+    return min(device.activeFormat.videoMaxZoomFactor, maxZoom)
+  }
+
+  /// Zoom applied at the sensor, so it sharpens what is captured rather than
+  /// enlarging a finished frame. The preview and the model's frames both follow it.
+  func setZoom(_ factor: CGFloat) {
+    guard let device else { return }
+    let clamped = min(max(factor, 1), maxAvailableZoom)
+    sessionQueue.async {
+      do {
+        try device.lockForConfiguration()
+        device.videoZoomFactor = clamped
+        device.unlockForConfiguration()
+      } catch {
+        NSLog("[iPhoneCamera] Zoom failed: %@", error.localizedDescription)
+      }
+    }
+  }
+
   /// Called on the capture queue for every frame; the FrameHub throttles per consumer.
   var onPixelBuffer: ((CVPixelBuffer, CMTime) -> Void)?
 
@@ -29,7 +61,10 @@ class IPhoneCameraManager: NSObject {
 
   private func configureSession() {
     captureSession.beginConfiguration()
-    captureSession.sessionPreset = .medium
+    // 1920x1080 rather than .medium's 480x360: the preview layer shows it at
+    // full quality, and the FrameHub throttles what reaches the CPU path.
+    captureSession.sessionPreset =
+      captureSession.canSetSessionPreset(.hd1920x1080) ? .hd1920x1080 : .high
 
     // Add back camera input
     guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
@@ -41,6 +76,7 @@ class IPhoneCameraManager: NSObject {
 
     if captureSession.canAddInput(input) {
       captureSession.addInput(input)
+      device = camera
     }
 
     // Add video output
