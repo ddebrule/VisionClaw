@@ -29,6 +29,9 @@ final class TrackWalkController: ObservableObject {
   @Published var errorMessage: String?
 
   var isActive: Bool { phase != .idle }
+  /// The glasses link should stay up (a fold must reconnect so unfolding resumes).
+  /// Not while finishing: a deliberate stop must let the link wind down.
+  var keepsGlassesAlive: Bool { phase == .preparing || phase == .recording || phase == .paused }
   private(set) var isPausedByFold = false
 
   private var recorder: TrackWalkRecorder?
@@ -71,22 +74,22 @@ final class TrackWalkController: ObservableObject {
     }
 
     let id = UUID()
-    let capture = Capture(
-      id: id, mode: .trackWalk, sessionId: session.id, trackName: session.track,
-      transcript: [], scoutContext: "Track Walk", vehicleModel: "", durationMin: 0,
-      state: .recording, videoFileName: TrackWalkMedia.url(for: id, ext: "mov").lastPathComponent)
-    // On disk before recording starts, so a crash from here on is recoverable.
-    ScoutOutbox.shared.add(capture)
-    TrackWalkFinisher.shared.liveCaptureId = id
-
     let recorder = TrackWalkRecorder(outputURL: TrackWalkMedia.url(for: id, ext: "mov"))
     do {
       try recorder.start()
     } catch {
-      TrackWalkFinisher.shared.liveCaptureId = nil
+      try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
       fail("The microphone could not start.")
       return
     }
+    let capture = Capture(
+      id: id, mode: .trackWalk, sessionId: session.id, trackName: session.track,
+      transcript: [], scoutContext: "Track Walk", vehicleModel: "", durationMin: 0,
+      state: .recording, videoFileName: TrackWalkMedia.url(for: id, ext: "mov").lastPathComponent)
+    // On disk before the first frame is written (the .mov is created on the
+    // first video frame, after the subscription below), so a crash is recoverable.
+    ScoutOutbox.shared.add(capture)
+    TrackWalkFinisher.shared.liveCaptureId = id
     self.recorder = recorder
     self.captureId = id
     self.unsubscribeFrames = unsubscribeFrames
@@ -176,7 +179,8 @@ final class TrackWalkController: ObservableObject {
     TrackWalkFinisher.shared.liveCaptureId = nil
     try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     phase = .idle
-    await TrackWalkFinisher.shared.advance(id)
+    // A fresh task: it must not inherit the caller's cancellation (an automatic stop runs inside the ticker being cancelled).
+    Task { await TrackWalkFinisher.shared.advance(id) }
   }
 
   // MARK: - Limits

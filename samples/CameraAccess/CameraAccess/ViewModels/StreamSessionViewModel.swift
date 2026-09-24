@@ -58,7 +58,7 @@ class StreamSessionViewModel: ObservableObject {
   /// Walk runs (a fold's stream stop must reconnect so unfolding resumes; a
   /// bare stop finishes the walk and the link then winds down).
   private var keepGlassesAlive: Bool {
-    if trackWalk.isActive { return true }
+    if trackWalk.keepsGlassesAlive { return true }
     guard let gemini = geminiSessionVM else { return false }
     return gemini.isGeminiActive || gemini.hasUnsentReport
   }
