@@ -103,6 +103,9 @@ class StreamSessionViewModel: ObservableObject {
   private var retryTask: Task<Void, Never>?
   private var attemptWatchdog: Task<Void, Never>?
   private var sessionStateListenerToken: AnyListenerToken?
+  private var sessionErrorTask: Task<Void, Never>?
+  // The session's state carries no reason for a stop; its error stream does.
+  private var lastSessionError: String?
   private var stateListenerToken: AnyListenerToken?
   private var videoFrameListenerToken: AnyListenerToken?
   private var errorListenerToken: AnyListenerToken?
@@ -334,6 +337,8 @@ class StreamSessionViewModel: ObservableObject {
     sessionGeneration &+= 1
     let generation = sessionGeneration
     sessionHasStarted = false
+    streamHasStarted = false
+    lastSessionError = nil
     do {
       let session = try wearables.createSession(deviceSelector: deviceSelector)
       deviceSession = session
@@ -342,6 +347,17 @@ class StreamSessionViewModel: ObservableObject {
         Task { @MainActor [weak self] in
           guard let self, generation == self.sessionGeneration else { return }
           self.handleSessionState(state)
+        }
+      }
+      // Created before start() so errors raised while starting are buffered, not lost.
+      let sessionErrors = session.errorStream()
+      sessionErrorTask?.cancel()
+      sessionErrorTask = Task { @MainActor [weak self] in
+        for await error in sessionErrors {
+          guard let self, generation == self.sessionGeneration else { return }
+          let text = String(describing: error)
+          self.lastSessionError = text
+          self.logEvent("session error: \(text)")
         }
       }
       streamingStatus = .waiting
@@ -373,7 +389,15 @@ class StreamSessionViewModel: ObservableObject {
     case .idle, .stopped:
       guard sessionHasStarted else { return }
       if wantsStream {
+        let neverStreamed = !streamHasStarted
         handleGlassesDrop(reason: "session \(state)")
+        if neverStreamed, streamingStatus == .stopped {
+          var message = "Your glasses ended the connection before video started. Try again, or tap Start on iPhone to use the phone camera."
+          if let reason = lastSessionError {
+            message += "\n\nGlasses said: \(reason)"
+          }
+          showError(message)
+        }
       } else {
         markStopped()
       }
@@ -594,6 +618,8 @@ class StreamSessionViewModel: ObservableObject {
     cameraGeneration &+= 1
     sessionGeneration &+= 1
     sessionStateListenerToken = nil
+    sessionErrorTask?.cancel()
+    sessionErrorTask = nil
     stateListenerToken = nil
     videoFrameListenerToken = nil
     errorListenerToken = nil
